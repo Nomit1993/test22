@@ -1,0 +1,62 @@
+/* Class = "UIButton"; normalTitle = "Add Contact"; ObjectID = "21P-WC-8yr"; */
+"21P-WC-8yr.normalTitle" = "Contactpersoon toevoegen";
+/* Class = "UILabel"; text = "Add a New Contact"; ObjectID = "7Cs-k6-7n4"; */
+"7Cs-k6-7n4.text" = "Nieuwe contactpersoon toevoegen";
+/* Class = "UILabel"; text = "Join a Group Chat"; ObjectID = "7dx-xo-wIB"; */
+"7dx-xo-wIB.text" = "Deelnemen aan een groepsgesprek";
+/* Class = "UIBarButtonItem"; title = "Settings"; ObjectID = "BWH-2I-fSI"; */
+"BWH-2I-fSI.title" = "Instellingen";
+/* Class = "UINavigationItem"; title = "Contact Requests"; ObjectID = "GI8-WI-wYs"; */
+"GI8-WI-wYs.title" = "Contactverzoeken";
+/* Class = "UITableViewController"; title = "Join Group Chat"; ObjectID = "GpF-k7-Z6D"; */
+"GpF-k7-Z6D.title" = "Deelnemen aan groepsgesprek";
+/* Class = "UINavigationItem"; title = "Select An Account"; ObjectID = "heq-Ls-ieg"; */
+"heq-Ls-ieg.title" = "Een account selecteren";
+/* Class = "UINavigationItem"; title = "Add Contact"; ObjectID = "HYb-u1-ZN3"; */
+"HYb-u1-ZN3.title" = "Contactpersoon toevoegen";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "IGd-kM-9BO"; */
+"IGd-kM-9BO.title" = "Sluiten";
+/* Class = "UITabBarItem"; title = "Item"; ObjectID = "iLC-4b-aD9"; */
+"iLC-4b-aD9.title" = "Item";
+/* Class = "UITabBarItem"; title = "Item"; ObjectID = "iLC-4b-aDr"; */
+"iLC-4b-aDr.title" = "Item";
+/* Class = "UITabBarItem"; title = "Chats"; ObjectID = "jh7-be-VPo"; */
+"jh7-be-VPo.title" = "Gesprekken";
+/* Class = "UIButton"; normalTitle = "Send"; ObjectID = "jIW-zk-rUu"; */
+"jIW-zk-rUu.normalTitle" = "Verzenden";
+/* Class = "UINavigationItem"; title = "Group Chat"; ObjectID = "k0T-5X-FQu"; */
+"k0T-5X-FQu.title" = "Groepsgesprek";
+/* Class = "UILabel"; text = "Pull to load more messages"; ObjectID = "K3M-5z-C5O"; */
+"K3M-5z-C5O.text" = "Trek om meer berichten op te halen";
+/* Class = "UILabel"; text = "Send Message"; ObjectID = "KUa-bA-cQb"; */
+"KUa-bA-cQb.text" = "Bericht versturen";
+/* Class = "UINavigationItem"; title = "Send A Message "; ObjectID = "MiR-iW-O6e"; */
+"MiR-iW-O6e.title" = "Een bericht versturen ";
+/* Class = "UINavigationItem"; title = "New"; ObjectID = "Msw-bP-HIu"; */
+"Msw-bP-HIu.title" = "Nieuw";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "NyY-WQ-3hC"; */
+"NyY-WQ-3hC.title" = "Sluiten";
+/* Class = "UIBarButtonItem"; title = "Previous"; ObjectID = "OxW-Yc-5ky"; */
+"OxW-Yc-5ky.title" = "Vorige";
+/* Class = "UIBarButtonItem"; title = "Next"; ObjectID = "PI2-N1-aLJ"; */
+"PI2-N1-aLJ.title" = "Volgende";
+/* Class = "UIBarButtonItem"; title = "Compose"; ObjectID = "pyP-qb-mfr"; */
+"pyP-qb-mfr.title" = "Opstellen";
+/* Class = "UIButton"; normalTitle = "Join Group"; ObjectID = "Q7I-qj-4zk"; */
+"Q7I-qj-4zk.normalTitle" = "Groep vervoegen";
+/* Class = "UINavigationItem"; title = "Contacts"; ObjectID = "qsR-dX-TO1"; */
+"qsR-dX-TO1.title" = "Contactpersonen";
+/* Class = "UINavigationItem"; title = "Chats"; ObjectID = "RRa-hC-xrf"; */
+"RRa-hC-xrf.title" = "Gesprekken";
+/* Class = "UILabel"; text = "Detail"; ObjectID = "sff-9g-z31"; */
+"sff-9g-z31.text" = "Detail";
+/* Class = "UILabel"; text = "View Contact Requests"; ObjectID = "SmS-bT-id6"; */
+"SmS-bT-id6.text" = "Contactaanvragen bekijken";
+/* Class = "UIBarButtonItem"; title = "Done"; ObjectID = "TMS-52-ORP"; */
+"TMS-52-ORP.title" = "Klaar";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "Vtv-sv-ErG"; */
+"Vtv-sv-ErG.title" = "Sluiten";
+/* Class = "UIBarButtonItem"; title = "Add"; ObjectID = "wNA-vF-ohQ"; */
+"wNA-vF-ohQ.title" = "Toevoegen";
+/* Class = "UINavigationItem"; title = "Join Group Chat"; ObjectID = "yIE-Ub-BAk"; */
+"yIE-Ub-BAk.title" = "Deelnemen aan groepsgesprek";

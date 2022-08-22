@@ -1,0 +1,42 @@
+/* Class = "UILabel"; text = "someone@yax.im"; ObjectID = "0IG-5n-3XF"; */
+"0IG-5n-3XF.text" = "用户名@yax.im";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "0Tx-nj-jHi"; */
+"0Tx-nj-jHi.title" = "关闭";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "29t-GS-Yof"; */
+"29t-GS-Yof.title" = "关闭";
+/* Class = "UILabel"; text = "yax.im is a public server, not affiliated with Monal. This page is provided for convenience. "; ObjectID = "arw-q8-u8I"; */
+"arw-q8-u8I.text" = "yax.im 是一个公共服务器，不属于 Monal。 提供此页面是为了方便理解。 ";
+/* Class = "UIButton"; normalTitle = "Start Chatting"; ObjectID = "c04-pS-Uoi"; */
+"c04-pS-Uoi.normalTitle" = "开始对话";
+/* Class = "UIButton"; normalTitle = "Register"; ObjectID = "c9v-kP-ocC"; */
+"c9v-kP-ocC.normalTitle" = "注册";
+/* Class = "UILabel"; text = "Like email, you can make your account on many sites and talk to anyone. You can use this form to make an account with yax.im.  "; ObjectID = "DfQ-Vo-v2C"; */
+"DfQ-Vo-v2C.text" = "像电子邮件一样，您可以在许多网站上创建您的帐户并与任何人交谈。 您可以使用此表格在 yax.im 创建一个帐户。  ";
+/* Class = "UIButton"; normalTitle = "Register"; ObjectID = "dpn-up-7bR"; */
+"dpn-up-7bR.normalTitle" = "注册";
+/* Class = "UILabel"; text = "Congratulations!"; ObjectID = "eEG-v1-Mb2"; */
+"eEG-v1-Mb2.text" = "恭喜！";
+/* Class = "UIButton"; normalTitle = "Login"; ObjectID = "Gth-vl-n15"; */
+"Gth-vl-n15.normalTitle" = "登录";
+/* Class = "UIButton"; normalTitle = "Terms of service"; ObjectID = "hyG-BH-GJV"; */
+"hyG-BH-GJV.normalTitle" = "服务条款";
+/* Class = "UITabBarItem"; title = "Item"; ObjectID = "iLC-4b-aD8"; */
+"iLC-4b-aD8.title" = "项目";
+/* Class = "UITextField"; placeholder = "Account@something.com"; ObjectID = "ktr-DL-MYt"; */
+"ktr-DL-MYt.placeholder" = "用户名@something.com";
+/* Class = "UITextField"; placeholder = "Password"; ObjectID = "Qrh-pK-XJH"; */
+"Qrh-pK-XJH.placeholder" = "密码";
+/* Class = "UIButton"; normalTitle = "Set up an account later"; ObjectID = "QY7-bW-ufD"; */
+"QY7-bW-ufD.normalTitle" = "以后注册账户";
+/* Class = "UITextField"; placeholder = "Password"; ObjectID = "rHr-ew-oBM"; */
+"rHr-ew-oBM.placeholder" = "密码";
+/* Class = "UILabel"; text = "Sign in or register an account.  If needed, more advanced options are in Accounts under Settings. "; ObjectID = "Spm-F2-kku"; */
+"Spm-F2-kku.text" = "登录或注册一个帐户。 如果需要，更多高级选项位于“设置”下的“帐户”中。 ";
+/* Class = "UITextField"; placeholder = "Username"; ObjectID = "Tjb-kj-Z5d"; */
+"Tjb-kj-Z5d.placeholder" = "用户名";
+/* Class = "UILabel"; text = "You are all ready to chat. People can message you  at:"; ObjectID = "Trj-ps-nO8"; */
+"Trj-ps-nO8.text" = "你可以开始聊天了。其他人可以发消息给你的账号：";
+/* Class = "UINavigationItem"; title = "Register"; ObjectID = "xCl-CO-aFW"; */
+"xCl-CO-aFW.title" = "注册";
+/* Class = "UINavigationItem"; title = "Welcome"; ObjectID = "yxA-wa-jGH"; */
+"yxA-wa-jGH.title" = "欢迎";

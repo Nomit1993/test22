@@ -1,0 +1,38 @@
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "2FM-6l-v8h"; */
+"2FM-6l-v8h.title" = "Kapat";
+/* Class = "UIButton"; normalTitle = "Change Password"; ObjectID = "d7c-hm-a1K"; */
+"d7c-hm-a1K.normalTitle" = "Şifreyi Değiştir";
+/* Class = "UISplitViewController"; title = "Settings"; ObjectID = "dgM-uB-Aap"; */
+"dgM-uB-Aap.title" = "Ayarlar";
+/* Class = "UINavigationItem"; title = "Settings"; ObjectID = "gFd-bu-COM"; */
+"gFd-bu-COM.title" = "Ayarlar";
+/* Class = "UINavigationItem"; title = "Accounts"; ObjectID = "GM4-e8-f1D"; */
+"GM4-e8-f1D.title" = "Hesaplar";
+/* Class = "UITableViewController"; title = "Settings"; ObjectID = "kjF-U7-P8y"; */
+"kjF-U7-P8y.title" = "Ayarlar";
+/* Class = "UINavigationItem"; title = "Root View Controller"; ObjectID = "mLa-XU-o1Q"; */
+"mLa-XU-o1Q.title" = "Kök Görüş Denetleyicisi";
+/* Class = "UITableViewController"; title = "Notifications"; ObjectID = "nPR-ET-sg3"; */
+"nPR-ET-sg3.title" = "Bildirimler";
+/* Class = "UINavigationItem"; title = "Account Edit"; ObjectID = "pa7-vQ-Yz3"; */
+"pa7-vQ-Yz3.title" = "Hesap Düzenle";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "QTE-cG-3LC"; */
+"QTE-cG-3LC.title" = "Kapat";
+/* Class = "UIBarButtonItem"; title = "Reconnect All"; ObjectID = "r7s-58-k2m"; */
+"r7s-58-k2m.title" = "Tümüne Tekrar Bağlan";
+/* Class = "UILabel"; text = "Detail"; ObjectID = "rF7-34-0sc"; */
+"rF7-34-0sc.text" = "Detay";
+/* Class = "UINavigationItem"; title = "Sounds"; ObjectID = "Rum-Ee-xSZ"; */
+"Rum-Ee-xSZ.title" = "Sesler";
+/* Class = "UIBarButtonItem"; title = "Save"; ObjectID = "TJt-Kl-UDV"; */
+"TJt-Kl-UDV.title" = "Kaydet";
+/* Class = "UITableViewController"; title = "Account Edit"; ObjectID = "Tus-3k-aPR"; */
+"Tus-3k-aPR.title" = "Hesap Düzenle";
+/* Class = "UITabBarItem"; title = "Item"; ObjectID = "VJW-A6-Zpp"; */
+"VJW-A6-Zpp.title" = "Parça";
+/* Class = "UINavigationItem"; title = "Root View Controller"; ObjectID = "vKm-u5-p5y"; */
+"vKm-u5-p5y.title" = "Kök Görüş Denetleyicisi";
+/* Class = "UINavigationItem"; title = "Accounts With Logs"; ObjectID = "wlb-8I-yzZ"; */
+"wlb-8I-yzZ.title" = "Hesaplar ve Günlük";
+/* Class = "UITabBarItem"; title = "Settings"; ObjectID = "YtW-zK-Qze"; */
+"YtW-zK-Qze.title" = "Ayarlar";

@@ -1,0 +1,34 @@
+{
+  "configurations" : [
+    {
+      "id" : "22AC57B3-E817-44FE-B3F9-25137606AFD7",
+      "name" : "Configuration 1",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:Monal.xcodeproj",
+        "identifier" : "C1850EB425F38A2D003D506A",
+        "name" : "MonalUITests"
+      }
+    },
+    {
+      "skippedTests" : [
+        "MonalXMPPUnitTests"
+      ],
+      "target" : {
+        "containerPath" : "container:Monal.xcodeproj",
+        "identifier" : "C1049185261301530054AC9E",
+        "name" : "MonalXMPPUnitTests"
+      }
+    }
+  ],
+  "version" : 1
+}

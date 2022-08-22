@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<document type="com.apple.InterfaceBuilder3.CocoaTouch.XIB" version="3.0" toolsVersion="19162" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" useAutolayout="YES" useTraitCollections="YES" colorMatched="YES">
+    <device id="retina4_7" orientation="portrait" appearance="dark"/>
+    <dependencies>
+        <deployment identifier="iOS"/>
+        <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="19144"/>
+        <capability name="documents saved in the Xcode 8 format" minToolsVersion="8.0"/>
+    </dependencies>
+    <objects>
+        <placeholder placeholderIdentifier="IBFilesOwner" id="-1" userLabel="File's Owner"/>
+        <placeholder placeholderIdentifier="IBFirstResponder" id="-2" customClass="UIResponder"/>
+        <tableViewCell contentMode="scaleToFill" selectionStyle="default" indentationWidth="10" reuseIdentifier="AccountCell" id="l5E-LT-0kT" customClass="MLSwitchCell">
+            <rect key="frame" x="0.0" y="0.0" width="320" height="44"/>
+            <autoresizingMask key="autoresizingMask"/>
+            <tableViewCellContentView key="contentView" opaque="NO" clipsSubviews="YES" multipleTouchEnabled="YES" contentMode="center" tableViewCell="l5E-LT-0kT" id="DMi-LI-zqm">
+                <rect key="frame" x="0.0" y="0.0" width="320" height="44"/>
+                <autoresizingMask key="autoresizingMask"/>
+                <subviews>
+                    <label opaque="NO" userInteractionEnabled="NO" contentMode="left" horizontalHuggingPriority="251" verticalHuggingPriority="251" misplaced="YES" text="Label" lineBreakMode="tailTruncation" numberOfLines="0" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="r8c-Jr-MKH">
+                        <rect key="frame" x="8" y="11" width="120" height="21"/>
+                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                        <nil key="textColor"/>
+                        <nil key="highlightedColor"/>
+                    </label>
+                    <label opaque="NO" userInteractionEnabled="NO" contentMode="right" horizontalHuggingPriority="251" verticalHuggingPriority="251" text="" textAlignment="right" lineBreakMode="tailTruncation" baselineAdjustment="alignBaselines" adjustsFontSizeToFit="NO" translatesAutoresizingMaskIntoConstraints="NO" id="YK7-IO-DiF">
+                        <rect key="frame" x="208" y="8" width="104" height="28"/>
+                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                        <nil key="textColor"/>
+                        <nil key="highlightedColor"/>
+                    </label>
+                    <textField opaque="NO" clipsSubviews="YES" contentMode="scaleToFill" contentHorizontalAlignment="left" contentVerticalAlignment="center" textAlignment="right" minimumFontSize="17" translatesAutoresizingMaskIntoConstraints="NO" id="ZDH-II-Cc8">
+                        <rect key="frame" x="212" y="15" width="100" height="21"/>
+                        <constraints>
+                            <constraint firstAttribute="width" relation="greaterThanOrEqual" constant="100" id="6hs-n0-kIU"/>
+                        </constraints>
+                        <fontDescription key="fontDescription" type="system" pointSize="17"/>
+                        <textInputTraits key="textInputTraits"/>
+                    </textField>
+                    <switch opaque="NO" contentMode="scaleToFill" horizontalHuggingPriority="750" verticalHuggingPriority="750" contentHorizontalAlignment="center" contentVerticalAlignment="center" translatesAutoresizingMaskIntoConstraints="NO" id="4FD-Uj-Ib9">
+                        <rect key="frame" x="263" y="6" width="51" height="31"/>
+                        <constraints>
+                            <constraint firstAttribute="width" constant="49" id="sJa-cB-ur2"/>
+                        </constraints>
+                    </switch>
+                    <slider hidden="YES" opaque="NO" contentMode="scaleToFill" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" value="5" minValue="1" maxValue="30" translatesAutoresizingMaskIntoConstraints="NO" id="tEn-lq-qzq">
+                        <rect key="frame" x="261" y="6" width="53" height="34"/>
+                        <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
+                    </slider>
+                    <switch hidden="YES" opaque="NO" contentMode="scaleToFill" horizontalHuggingPriority="750" verticalHuggingPriority="750" fixedFrame="YES" contentHorizontalAlignment="center" contentVerticalAlignment="center" on="YES" translatesAutoresizingMaskIntoConstraints="NO" id="x3b-5T-KDG">
+                        <rect key="frame" x="261" y="6" width="49" height="31"/>
+                        <autoresizingMask key="autoresizingMask" flexibleMaxX="YES" flexibleMaxY="YES"/>
+                        <connections>
+                            <action selector="actionSlider:" destination="l5E-LT-0kT" eventType="valueChanged" id="2qQ-EE-zN7"/>
+                        </connections>
+                    </switch>
+                </subviews>
+                <constraints>
+                    <constraint firstItem="YK7-IO-DiF" firstAttribute="bottom" secondItem="r8c-Jr-MKH" secondAttribute="bottom" id="1sy-ax-Cvq"/>
+                    <constraint firstItem="4FD-Uj-Ib9" firstAttribute="top" secondItem="DMi-LI-zqm" secondAttribute="top" constant="6" id="4fg-xd-lHq"/>
+                    <constraint firstAttribute="bottom" secondItem="r8c-Jr-MKH" secondAttribute="bottom" constant="8" id="7Fg-Me-9wR"/>
+                    <constraint firstAttribute="trailing" secondItem="ZDH-II-Cc8" secondAttribute="trailing" constant="8" id="Ib0-oo-Q3I"/>
+                    <constraint firstAttribute="trailing" secondItem="4FD-Uj-Ib9" secondAttribute="trailing" constant="8" id="bmV-Bx-G5I"/>
+                    <constraint firstItem="ZDH-II-Cc8" firstAttribute="leading" secondItem="r8c-Jr-MKH" secondAttribute="trailing" constant="12" id="buN-7Z-lV7"/>
+                    <constraint firstItem="r8c-Jr-MKH" firstAttribute="leading" secondItem="DMi-LI-zqm" secondAttribute="leading" constant="8" id="c6a-qP-ghi"/>
+                    <constraint firstItem="r8c-Jr-MKH" firstAttribute="top" secondItem="DMi-LI-zqm" secondAttribute="top" constant="8" id="cgZ-DB-LIO"/>
+                    <constraint firstAttribute="trailing" secondItem="YK7-IO-DiF" secondAttribute="trailing" constant="8" id="dCq-o8-pep"/>
+                    <constraint firstItem="YK7-IO-DiF" firstAttribute="leading" secondItem="r8c-Jr-MKH" secondAttribute="trailing" constant="8" id="gaE-YG-89u"/>
+                    <constraint firstItem="ZDH-II-Cc8" firstAttribute="bottom" secondItem="r8c-Jr-MKH" secondAttribute="bottom" id="p5f-Cg-aiF"/>
+                    <constraint firstItem="YK7-IO-DiF" firstAttribute="top" secondItem="r8c-Jr-MKH" secondAttribute="top" id="qVA-K4-IC0"/>
+                </constraints>
+            </tableViewCellContentView>
+            <connections>
+                <outlet property="cellLabel" destination="r8c-Jr-MKH" id="EYp-Bu-pMd"/>
+                <outlet property="labelRight" destination="YK7-IO-DiF" id="mDJ-Ej-M9V"/>
+                <outlet property="slider" destination="tEn-lq-qzq" id="NzN-Id-6RI"/>
+                <outlet property="switchTouch" destination="x3b-5T-KDG" id="9zQ-CJ-5pz"/>
+                <outlet property="textInputField" destination="ZDH-II-Cc8" id="XuF-cf-PQ0"/>
+                <outlet property="toggleSwitch" destination="4FD-Uj-Ib9" id="01q-Cf-jRH"/>
+            </connections>
+            <point key="canvasLocation" x="224" y="49.475262368815599"/>
+        </tableViewCell>
+    </objects>
+</document>

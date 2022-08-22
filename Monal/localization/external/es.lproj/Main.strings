@@ -1,0 +1,62 @@
+/* Class = "UIButton"; normalTitle = "Add Contact"; ObjectID = "21P-WC-8yr"; */
+"21P-WC-8yr.normalTitle" = "Añadir contacto o canal";
+/* Class = "UILabel"; text = "Add a New Contact"; ObjectID = "7Cs-k6-7n4"; */
+"7Cs-k6-7n4.text" = "Añadir un nuevo contacto o canal";
+/* Class = "UILabel"; text = "Join a Group Chat"; ObjectID = "7dx-xo-wIB"; */
+"7dx-xo-wIB.text" = "Unirse a un chat de grupo";
+/* Class = "UIBarButtonItem"; title = "Settings"; ObjectID = "BWH-2I-fSI"; */
+"BWH-2I-fSI.title" = "Configuraciones";
+/* Class = "UINavigationItem"; title = "Contact Requests"; ObjectID = "GI8-WI-wYs"; */
+"GI8-WI-wYs.title" = "Solicitudes de contacto";
+/* Class = "UITableViewController"; title = "Join Group Chat"; ObjectID = "GpF-k7-Z6D"; */
+"GpF-k7-Z6D.title" = "Unirse a un chat de grupo";
+/* Class = "UINavigationItem"; title = "Select An Account"; ObjectID = "heq-Ls-ieg"; */
+"heq-Ls-ieg.title" = "Seleccionar una cuenta";
+/* Class = "UINavigationItem"; title = "Add Contact"; ObjectID = "HYb-u1-ZN3"; */
+"HYb-u1-ZN3.title" = "Añadir contacto";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "IGd-kM-9BO"; */
+"IGd-kM-9BO.title" = "Cerrar";
+/* Class = "UITabBarItem"; title = "Item"; ObjectID = "iLC-4b-aD9"; */
+"iLC-4b-aD9.title" = "Ítem";
+/* Class = "UITabBarItem"; title = "Item"; ObjectID = "iLC-4b-aDr"; */
+"iLC-4b-aDr.title" = "Ítem";
+/* Class = "UITabBarItem"; title = "Chats"; ObjectID = "jh7-be-VPo"; */
+"jh7-be-VPo.title" = "Chats";
+/* Class = "UIButton"; normalTitle = "Send"; ObjectID = "jIW-zk-rUu"; */
+"jIW-zk-rUu.normalTitle" = "Enviar";
+/* Class = "UINavigationItem"; title = "Group Chat"; ObjectID = "k0T-5X-FQu"; */
+"k0T-5X-FQu.title" = "Chat de grupo";
+/* Class = "UILabel"; text = "Pull to load more messages"; ObjectID = "K3M-5z-C5O"; */
+"K3M-5z-C5O.text" = "Tire para cargar más mensajes";
+/* Class = "UILabel"; text = "Send Message"; ObjectID = "KUa-bA-cQb"; */
+"KUa-bA-cQb.text" = "Enviar mensaje";
+/* Class = "UINavigationItem"; title = "Send A Message "; ObjectID = "MiR-iW-O6e"; */
+"MiR-iW-O6e.title" = "Enviar un mensaje ";
+/* Class = "UINavigationItem"; title = "New"; ObjectID = "Msw-bP-HIu"; */
+"Msw-bP-HIu.title" = "Nuevo";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "NyY-WQ-3hC"; */
+"NyY-WQ-3hC.title" = "Cerrar";
+/* Class = "UIBarButtonItem"; title = "Previous"; ObjectID = "OxW-Yc-5ky"; */
+"OxW-Yc-5ky.title" = "Anterior";
+/* Class = "UIBarButtonItem"; title = "Next"; ObjectID = "PI2-N1-aLJ"; */
+"PI2-N1-aLJ.title" = "Siguiente";
+/* Class = "UIBarButtonItem"; title = "Compose"; ObjectID = "pyP-qb-mfr"; */
+"pyP-qb-mfr.title" = "Componer";
+/* Class = "UIButton"; normalTitle = "Join Group"; ObjectID = "Q7I-qj-4zk"; */
+"Q7I-qj-4zk.normalTitle" = "Unirse al grupo";
+/* Class = "UINavigationItem"; title = "Contacts"; ObjectID = "qsR-dX-TO1"; */
+"qsR-dX-TO1.title" = "Contactos";
+/* Class = "UINavigationItem"; title = "Chats"; ObjectID = "RRa-hC-xrf"; */
+"RRa-hC-xrf.title" = "Chats";
+/* Class = "UILabel"; text = "Detail"; ObjectID = "sff-9g-z31"; */
+"sff-9g-z31.text" = "Detalles";
+/* Class = "UILabel"; text = "View Contact Requests"; ObjectID = "SmS-bT-id6"; */
+"SmS-bT-id6.text" = "Ver solicitudes de contacto";
+/* Class = "UIBarButtonItem"; title = "Done"; ObjectID = "TMS-52-ORP"; */
+"TMS-52-ORP.title" = "Hecho";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "Vtv-sv-ErG"; */
+"Vtv-sv-ErG.title" = "Cerrar";
+/* Class = "UIBarButtonItem"; title = "Add"; ObjectID = "wNA-vF-ohQ"; */
+"wNA-vF-ohQ.title" = "Añadir";
+/* Class = "UINavigationItem"; title = "Join Group Chat"; ObjectID = "yIE-Ub-BAk"; */
+"yIE-Ub-BAk.title" = "Unirse al chat de grupo";

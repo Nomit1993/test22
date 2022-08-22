@@ -1,0 +1,139 @@
+project 'Monal.xcodeproj'
+source 'https://cdn.cocoapods.org/'
+ 
+# Uncomment the next line to define a global platform for your project
+platform :ios, '13.0'
+
+# ignore all warnings from all pods
+inhibit_all_warnings!
+
+def signalDeps
+  pod 'SignalProtocolObjC'
+  pod 'SignalProtocolC'
+  pod 'CryptoSwift', '~> 1.4.1'
+  pod 'Firebase/Crashlytics'
+  pod 'JitsiMeetSDK'
+end
+
+def monal
+  use_frameworks!
+  inhibit_all_warnings!
+  pod 'MBProgressHUD', '~> 1.2.0'
+  pod 'IDMPhotoBrowser'
+  pod 'SDWebImage', '~> 5.11.1'
+  pod 'DZNEmptyDataSet'
+  pod 'EAIntroView'
+  pod 'Firebase/Crashlytics'
+  pod 'NotificationBannerSwift', '~> 3.0.6'
+  pod 'TOCropViewController'
+  pod 'CryptoSwift', '~> 1.4.1'
+  pod 'JitsiMeetSDK'
+ 
+ 
+end
+
+def monalxmpp
+  # Uncomment the next line if you're using Swift or would like to use dynamic frameworks
+  use_frameworks!
+  inhibit_all_warnings!
+ 
+  pod 'CryptoSwift', '~> 1.4.1'
+  pod 'JitsiMeetSDK'
+  pod 'Firebase/Crashlytics'
+  pod 'SAMKeychain'
+  pod 'TPCircularBuffer'
+  pod 'CocoaLumberjack'
+ 
+  pod 'sqlite3/perf-threadsafe', inhibit_warnings: true
+  signalDeps
+  #this is only for ios12. Remove for mac builds.
+  pod 'OpenSSL-Universal', '1.1.1100'
+ 
+end
+
+
+target 'jrtplib-static' do
+  # Uncomment the next line if you're using Swift or would like to use dynamic frameworks
+  use_frameworks!
+end
+
+
+target 'shareSheet' do
+  # Uncomment the next line if you're using Swift or would like to use dynamic frameworks
+  use_frameworks!
+  inhibit_all_warnings!
+  pod 'CocoaLumberjack'
+end
+
+target 'NotificaionService' do
+  # Uncomment the next line if you're using Swift or would like to use dynamic frameworks
+  use_frameworks!
+  inhibit_all_warnings!
+  pod 'CocoaLumberjack'
+  pod 'JitsiMeetSDK'
+  pod 'CoreDataFullStack', '~> 0.4'
+  pod 'CryptoSwift', '~> 1.4.1'
+  signalDeps
+end
+
+target 'Monal' do
+  monal
+end
+
+target 'monalxmpp' do
+  monalxmpp
+end
+
+target 'MonalUITests' do
+  monalxmpp
+  monal
+end
+
+target 'MonalXMPPUnitTests' do
+  monalxmpp
+end
+
+# see https://stackoverflow.com/a/36547646/3528174
+post_install do |installer|
+  fix_deployment_target(installer)
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |configuration|
+      configuration.build_settings.delete('ARCHS')
+#     configuration.build_settings['ONLY_ACTIVE_ARCH'] = 'NO'
+#     if target.name == "TPCircularBuffer"
+#       configuration.build_settings['APPLICATION_EXTENSION_API_ONLY'] = 'YES'
+#     end
+      if target.name == "TOCropViewController-TOCropViewControllerBundle"
+        configuration.build_settings['CODE_SIGN_IDENTITY[sdk=macosx*]'] = '-'
+      end
+    end
+  end
+end
+
+# see https://github.com/CocoaPods/CocoaPods/issues/7314
+def fix_deployment_target(pod_installer)
+    if !pod_installer
+        return
+    end
+    puts "Make the pods deployment target version the same as our target"
+    
+    project = pod_installer.pods_project
+    deploymentMap = {}
+    project.build_configurations.each do |config|
+        deploymentMap[config.name] = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+    end
+    # p deploymentMap
+    
+    project.targets.each do |t|
+        puts "  #{t.name}"
+        t.build_configurations.each do |config|
+            oldTarget = config.build_settings['IPHONEOS_DEPLOYMENT_TARGET']
+            newTarget = deploymentMap[config.name]
+            if oldTarget == newTarget
+                next
+            end
+            puts "    #{config.name} deployment target: #{oldTarget} => #{newTarget}"
+            config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = newTarget
+        end
+    end
+end

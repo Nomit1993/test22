@@ -1,0 +1,35 @@
+framework module ZDetection {
+  umbrella header "ZDetection.h"
+
+  exclude header "ZVPNHelper.h"
+  exclude header "ReachabilityHelper.h"
+  exclude header "ExtensionThreatReceiver.h"
+  exclude header "ZLogConfig.h"
+  exclude header "ZLog.h"
+  exclude header "ZipsStatistics.h"
+  exclude header "ObjCDeviceEvents.h"
+  
+  explicit module Private {
+    header "ZDetectionInternalApi.h"
+    header "ZThreatInternal.h"
+    header "ArpHelper.h"
+    header "ActivationUrlHelper.h"
+    header "NSAttributedString+DDHTML.h"
+    header "Version.h"
+    header "ZWifiConnection+CoreDataProperties.h"
+    header "LocaleHelper.h"
+    header "PushTokenType.h"
+    header "ZWifiConnection.h"
+    header "HttpSessionDelegate.h"
+    header "ThreatClassifierHelper.h"
+    header "ZModelHelper.h"
+    header "ThreatClassification.h"
+
+
+    export *
+  }
+
+  export *
+  module * { export * }
+}
+

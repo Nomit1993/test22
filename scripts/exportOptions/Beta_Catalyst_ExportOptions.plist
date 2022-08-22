@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>method</key>
+	<string>developer-id</string>
+	<key>destination</key>
+	<string>export</string>
+	<key>compileBitcode</key>
+	<false/>
+	<key>signingCertificate</key>
+	<string>Developer ID Application</string>
+	<key>provisioningProfiles</key>
+	<dict>
+		<key>maccatalyst.G7YU7X7KRJ.SworIM</key>
+		<string>Monal Catalyst Developer id</string>
+		<key>maccatalyst.G7YU7X7KRJ.SworIM.NotificaionService</key>
+		<string>Monal Catalyst Notification NSE</string>
+	</dict>
+</dict>
+</plist>

@@ -1,0 +1,38 @@
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "2FM-6l-v8h"; */
+"2FM-6l-v8h.title" = "Закрыть";
+/* Class = "UIButton"; normalTitle = "Change Password"; ObjectID = "d7c-hm-a1K"; */
+"d7c-hm-a1K.normalTitle" = "Изменить пароль";
+/* Class = "UISplitViewController"; title = "Settings"; ObjectID = "dgM-uB-Aap"; */
+"dgM-uB-Aap.title" = "Настройки";
+/* Class = "UINavigationItem"; title = "Settings"; ObjectID = "gFd-bu-COM"; */
+"gFd-bu-COM.title" = "Настройки";
+/* Class = "UINavigationItem"; title = "Accounts"; ObjectID = "GM4-e8-f1D"; */
+"GM4-e8-f1D.title" = "Аккаунты";
+/* Class = "UITableViewController"; title = "Settings"; ObjectID = "kjF-U7-P8y"; */
+"kjF-U7-P8y.title" = "Настройки";
+/* Class = "UINavigationItem"; title = "Root View Controller"; ObjectID = "mLa-XU-o1Q"; */
+"mLa-XU-o1Q.title" = "Корневой контроллер";
+/* Class = "UITableViewController"; title = "Notifications"; ObjectID = "nPR-ET-sg3"; */
+"nPR-ET-sg3.title" = "Уведомления";
+/* Class = "UINavigationItem"; title = "Account Edit"; ObjectID = "pa7-vQ-Yz3"; */
+"pa7-vQ-Yz3.title" = "Редактировать аккаунт";
+/* Class = "UIBarButtonItem"; title = "Close"; ObjectID = "QTE-cG-3LC"; */
+"QTE-cG-3LC.title" = "Закрыть";
+/* Class = "UIBarButtonItem"; title = "Reconnect All"; ObjectID = "r7s-58-k2m"; */
+"r7s-58-k2m.title" = "Переподключить все";
+/* Class = "UILabel"; text = "Detail"; ObjectID = "rF7-34-0sc"; */
+"rF7-34-0sc.text" = "Подробности";
+/* Class = "UINavigationItem"; title = "Sounds"; ObjectID = "Rum-Ee-xSZ"; */
+"Rum-Ee-xSZ.title" = "Звуки";
+/* Class = "UIBarButtonItem"; title = "Save"; ObjectID = "TJt-Kl-UDV"; */
+"TJt-Kl-UDV.title" = "Сохранить";
+/* Class = "UITableViewController"; title = "Account Edit"; ObjectID = "Tus-3k-aPR"; */
+"Tus-3k-aPR.title" = "Редактировать аккаунт";
+/* Class = "UITabBarItem"; title = "Item"; ObjectID = "VJW-A6-Zpp"; */
+"VJW-A6-Zpp.title" = "Элемент";
+/* Class = "UINavigationItem"; title = "Root View Controller"; ObjectID = "vKm-u5-p5y"; */
+"vKm-u5-p5y.title" = "Корневой контроллер";
+/* Class = "UINavigationItem"; title = "Accounts With Logs"; ObjectID = "wlb-8I-yzZ"; */
+"wlb-8I-yzZ.title" = "Аккаунты с логами";
+/* Class = "UITabBarItem"; title = "Settings"; ObjectID = "YtW-zK-Qze"; */
+"YtW-zK-Qze.title" = "Настройки";

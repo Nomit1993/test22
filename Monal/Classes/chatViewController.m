@@ -1,0 +1,4724 @@
+//
+//  chat.m
+//  SworIM
+//
+//  Created by Anurodh Pokharel on 1/25/09.
+//  Copyright 2009 __MyCompanyName__. All rights reserved.
+//
+
+#import "chatViewController.h"
+#import "MLChatCell.h"
+#import "MLLinkCell.h"
+#import "MLImageMsgInCell.h"
+#import "MLChatImageCell.h"
+#import "MLChatMapsCell.h"
+#import "MLReloadCell.h"
+#import "MLReplyViewCell.h"
+#import "MLDecryptPopupCell.h"
+#import "UIColor+Theme.h"
+#import "MLConstants.h"
+#import "MonalAppDelegate.h"
+#import "MBProgressHUD.h"
+#import "xmpp.h"
+#import "MLOMEMO.h"
+#import "MLMucProcessor.h"
+#import "MLMetaInfo.h"
+#import "UIImageView+WebCache.h"
+#import "MLUploadQueueItem.h"
+#import "MLUploadQueueDocumentCell.h"
+#import "MLUploadQueueImageCell.h"
+#import "ContactsViewController.h"
+#import "IDMPhotoBrowser.h"
+#import "ContactDetails.h"
+#import "MLXMPPActivityItem.h"
+#import "MLImageManager.h"
+#import "DataLayer.h"
+#import "AESGcm.h"
+#import "HelperTools.h"
+#import "MLChatViewHelper.h"
+#import "MLChatInputContainer.h"
+#import "MLXEPSlashMeHandler.h"
+#import "MLSearchViewController.h"
+#import "MLFiletransfer.h"
+#import "MLNotificationQueue.h"
+#import <Contacts/Contacts.h>
+#import <ContactsUI/ContactsUI.h>
+#import <Monal-Swift.h>
+#import <stdatomic.h>
+#import <monalxmpp/monalxmpp-Swift.h>
+#import "CallViewController.h"
+@class MLECDHKeyExchange;
+#define UPLOAD_TYPE_IMAGE @"UploadTypeImage";
+#define UPLOAD_TYPE_URL @"UploadTypeURL";
+
+@import QuartzCore;
+@import MobileCoreServices;
+@import AVFoundation;
+@import QuartzCore.CATransaction;
+@class MLEmoji;
+
+@interface chatViewController()<IDMPhotoBrowserDelegate, ChatInputActionDelegage, UISearchControllerDelegate,CNContactViewControllerDelegate,CNContactPickerDelegate>
+{
+    BOOL _isTyping;
+    monal_void_block_t _cancelTypingNotification;
+    monal_void_block_t _cancelLastInteractionTimer;
+    NSMutableDictionary<NSString*, MLContact*>* _localMLContactCache;
+}
+
+@property (nonatomic, strong)  NSDateFormatter* destinationDateFormat;
+@property (nonatomic, strong)  NSCalendar* gregorian;
+@property (nonatomic, assign)  NSInteger thisyear;
+@property (nonatomic, assign)  NSInteger thismonth;
+@property (nonatomic, assign)  NSInteger thisday;
+@property (nonatomic, strong)  MBProgressHUD* uploadHUD;
+@property (nonatomic, strong)  MBProgressHUD* gpsHUD;
+
+@property (nonatomic, strong) NSMutableArray<MLMessage*>* messageList;
+@property (nonatomic, strong) NSMutableArray* photos;
+@property (nonatomic, strong) UIDocumentPickerViewController* filePicker;
+
+@property (nonatomic, assign) BOOL sendLocation; // used for first request
+
+@property (nonatomic, strong) NSDate* lastMamDate;
+@property (nonatomic, assign) BOOL hardwareKeyboardPresent;
+@property (nonatomic, strong) xmpp* xmppAccount;
+
+// Privacy settings that should not be loaded for each action
+@property (nonatomic, assign) BOOL showGeoLocationsInline;
+@property (nonatomic, assign) BOOL sendLastChatState;
+
+@property (nonatomic, strong) NSLayoutConstraint* chatInputConstraintHWKeyboard;
+@property (nonatomic, strong) NSLayoutConstraint* chatInputConstraintSWKeyboard;
+
+//infinite scrolling
+@property (atomic) BOOL viewDidAppear;
+@property (atomic) BOOL viewIsScrolling;
+@property (atomic) BOOL isLoadingMam;
+@property (atomic) BOOL moreMessagesAvailable;
+
+@property (nonatomic, strong) UIButton *lastMsgButton;
+@property (nonatomic, assign) CGFloat lastOffset;
+
+//SearchViewController, SearchResultViewController
+@property (nonatomic, strong) MLSearchViewController* searchController;
+@property (nonatomic, strong) NSMutableArray* searchResultMessageList;
+
+// Upload Queue
+@property (nonatomic, strong) NSMutableOrderedSet<MLUploadQueueItem*>* uploadQueue;
+@property (nonatomic, strong) NSLayoutConstraint* uploadMenuConstraint;
+
+@property (nonatomic, strong) void (^editingCallback)(NSString* newBody);
+@property (nonatomic, strong) NSMutableSet* previewedIds;
+
+@property (atomic) BOOL isAudioMessage;
+@property (nonatomic) UILongPressGestureRecognizer* longGestureRecognizer;
+
+@property (nonatomic) UIView* audioRecoderInfoView;
+
+#define lastMsgButtonSize 40.0
+
+@end
+
+@class HelperTools;
+
+@implementation chatViewController
+
+enum chatViewControllerSections {
+    reloadBoxSection,
+    messagesSection,
+    chatViewControllerSectionCnt
+};
+
+enum msgSentState {
+    msgSent,
+    msgErrorAfterSent,
+    msgRecevied,
+    msgDisplayed
+};
+
+-(void) setup
+{
+    self.hidesBottomBarWhenPushed = YES;
+    
+    NSDictionary* accountDict = [[DataLayer sharedInstance] detailsForAccount:self.contact.accountId];
+    if(accountDict)
+        self.jid = [NSString stringWithFormat:@"%@@%@",[accountDict objectForKey:@"username"], [accountDict objectForKey:@"domain"]];
+
+    // init privacy Settings
+    self.showGeoLocationsInline = [[HelperTools defaultsDB] boolForKey: @"ShowGeoLocation"];
+    self.sendLastChatState = [[HelperTools defaultsDB] boolForKey: @"SendLastChatState"];
+    self.previewedIds = [[NSMutableSet alloc] init];
+    
+    _localMLContactCache = [[NSMutableDictionary<NSString*, MLContact*> alloc] init];
+}
+
+-(void) setupWithContact:(MLContact*) contact
+{
+    self.contact = contact;
+    [self setup];
+}
+
+#pragma mark -  view lifecycle
+- (void)showActivityIndicator
+{
+    UIActivityIndicatorView *activityIndicatorView = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    activityIndicatorView.frame = CGRectMake(15, 0, 22, 22);
+    if ([[HelperTools defaultsDB] boolForKey:@"darkModeEnable"]){
+            //is dark
+        activityIndicatorView.color = [UIColor whiteColor];
+    }else{
+        //is light
+        activityIndicatorView.color = [UIColor blackColor];
+    }
+    [activityIndicatorView startAnimating];
+
+    UILabel *titleLabel = [UILabel new];
+    titleLabel.text = @"Connecting ..";
+    titleLabel.font = [UIFont systemFontOfSize:12];
+
+    CGSize fittingSize = [titleLabel sizeThatFits:CGSizeMake(200.0f, activityIndicatorView.frame.size.height)];
+    titleLabel.frame = CGRectMake(activityIndicatorView.frame.origin.x + activityIndicatorView.frame.size.width + 8,
+                                  activityIndicatorView.frame.origin.y,
+                                  fittingSize.width,
+                                  fittingSize.height);
+
+    UIView *titleView = [[UIView alloc] initWithFrame:CGRectMake(-(activityIndicatorView.frame.size.width + 8 + titleLabel.frame.size.width)/2,
+                                                                 -(activityIndicatorView.frame.size.height)/2,
+                                                                 activityIndicatorView.frame.size.width + 8 + titleLabel.frame.size.width,
+                                                                 activityIndicatorView.frame.size.height)];
+    [titleView addSubview:activityIndicatorView];
+    [titleView addSubview:titleLabel];
+
+    self.navigationItem.titleView = titleView;
+}
+
+-(void) viewDidLoad
+{
+    [super viewDidLoad];
+    [self initNavigationBarItems];
+    self.ReplySideview.backgroundColor = [UIColor monaldarkGreen];
+    self.ReplyView.layer.cornerRadius = 5;
+    self.ReplyView.layer.masksToBounds = YES;
+    self.ReplyMessageUser.textColor = [UIColor monaldarkGreen];
+    self.ReplytextLabel.textColor = [UIColor darkGrayColor];
+    [self.ReplyView setHidden:YES];
+    [self.ReplymediaView setHidden:YES];
+    [self.ReplytextLabel setHidden:YES];
+    [self setupDateObjects];
+    containerView = self.view;
+    self.messageTable.scrollsToTop = YES;
+    self.chatInput.scrollsToTop = NO;
+    self.editingCallback = nil;
+//    MonalAppDelegate* delegate =(MonalAppDelegate*) [UIApplication
+    
+    self.splitViewController.preferredDisplayMode=UISplitViewControllerDisplayModeAllVisible;
+    [self.messageTable setShowsHorizontalScrollIndicator:NO];
+    [self.messageTable setShowsVerticalScrollIndicator:NO];
+    _isTyping = NO;
+    self.hidesBottomBarWhenPushed=YES;
+    
+    self.chatInput.layer.borderColor = [UIColor lightGrayColor].CGColor;
+    self.chatInput.layer.cornerRadius = 3.0f;
+    self.chatInput.layer.borderWidth = 0.5f;
+    self.chatInput.textContainerInset = UIEdgeInsetsMake(5, 0, 5, 0);
+    
+    self.messageTable.rowHeight = UITableViewAutomaticDimension;
+    self.messageTable.estimatedRowHeight = UITableViewAutomaticDimension;
+    
+#if TARGET_OS_MACCATALYST
+    //does not become first responder like in iOS
+    [self.view addSubview:self.inputContainerView];
+
+    [self.inputContainerView.leadingAnchor constraintEqualToAnchor:self.inputContainerView.superview.leadingAnchor].active=YES;
+    [self.inputContainerView.bottomAnchor constraintEqualToAnchor:self.inputContainerView.superview.bottomAnchor].active=YES;
+    [self.inputContainerView.trailingAnchor constraintEqualToAnchor:self.inputContainerView.superview.trailingAnchor].active=YES;
+    self.tableviewBottom.constant += 20;
+#endif
+
+    self.filePicker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[mimeType_images, mimeType_gifFiles, mimeType_txtFiles, mimeType_videoFiles, mimeType_pdfFiles, mimeType_xmlFiles, mimeType_sourceCodeFiles,
+                        mimeType_audioFiles, mimeType_mp4Files, mimeType_movFiles, mimeType_zipFiles, mimeType_gzipFiles,
+                        mimeType_tarFiles, mimeType_rtfFiles, mimeType_xlsFiles, mimeType_pptFiles, mimeType_docFiles,
+                        mimeType_keyNoteFiles, mimeType_presentationFiles, mimeType_rmFiles, mimeType_mp3Files, mimeType_aviFiles, mimeType_mp4aFiles, mimeType_wavFiles] inMode:UIDocumentPickerModeImport];
+    self.filePicker.allowsMultipleSelection = NO;
+    self.filePicker.delegate = self;
+
+    // Set max height of the chatInput (The chat should be still readable while the HW-Keyboard is active
+    self.chatInputConstraintHWKeyboard = [NSLayoutConstraint constraintWithItem:self.chatInput attribute:NSLayoutAttributeHeight relatedBy:NSLayoutRelationLessThanOrEqual toItem:nil attribute:NSLayoutAttributeHeight multiplier:1 constant:self.view.frame.size.height * 0.6];
+    self.chatInputConstraintSWKeyboard = [NSLayoutConstraint constraintWithItem:self.chatInput attribute:NSLayoutAttributeHeight relatedBy:NSLayoutRelationLessThanOrEqual toItem:nil attribute:NSLayoutAttributeHeight multiplier:1 constant:self.view.frame.size.height * 0.4];
+    self.uploadMenuConstraint = [NSLayoutConstraint
+                                constraintWithItem:self.uploadMenuView
+                                attribute:NSLayoutAttributeHeight
+                                relatedBy:NSLayoutRelationEqual
+                                toItem:nil
+                                attribute:NSLayoutAttributeNotAnAttribute
+                                multiplier:1.0
+                                constant:0]; // Constant will be set through showUploadQueue
+    [self.inputContainerView addConstraint:self.chatInputConstraintHWKeyboard];
+    [self.inputContainerView addConstraint:self.chatInputConstraintSWKeyboard];
+    [self.uploadMenuView addConstraint:self.uploadMenuConstraint];
+    
+    [self setChatInputHeightConstraints:YES];
+    
+    if (@available(iOS 13.0, *)) {
+        [self.sendButton setImage:[UIImage systemImageNamed:@"paperplane.fill"] forState:UIControlStateNormal];
+        [self.plusButton setImage:[UIImage systemImageNamed:@"paperclip"] forState:UIControlStateNormal];
+    } else {
+        [self.sendButton setImage:[UIImage imageNamed:@"648-paper-airplane"] forState:UIControlStateNormal];
+        [self.plusButton setImage:[UIImage imageNamed:@"907-plus-rounded-square"] forState:UIControlStateNormal];
+    }
+    self.sendButton.tintColor = [UIColor monaldarkGreen];
+    self.plusButton.tintColor = [UIColor monaldarkGreen];
+    
+    [self initAudioRecordButton];
+//    [self.sendButton setHidden:NO];
+//    [self.sendButton setHighlighted:NO];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(refreshMessages:) name:kMLMessageHaskeyrefresh object:nil];
+    // setup refreshControl for infinite scrolling
+    UIRefreshControl* refreshControl = [[UIRefreshControl alloc] init];
+    if (self.contact.isGroup){
+        [refreshControl addTarget:self action:@selector(loadOldMsgHistory:) forControlEvents:UIControlEventValueChanged];
+        refreshControl.attributedTitle = [[NSAttributedString alloc] initWithString:NSLocalizedString(@"Loading more Messages from Server", @"")];
+        [self.messageTable setRefreshControl:refreshControl];
+       // [self loadOldMsgHistory:self];
+    }
+
+  
+    self.moreMessagesAvailable = YES;
+
+    self.uploadQueue = [[NSMutableOrderedSet<MLUploadQueueItem*> alloc] init];
+
+    [self.messageTable addInteraction:[[UIDropInteraction alloc] initWithDelegate:self]];
+    [self.inputContainerView addInteraction:[[UIDropInteraction alloc] initWithDelegate:self]];
+    
+#ifdef DISABLE_OMEMO
+    NSMutableArray* rightBarButtons = [[NSMutableArray alloc] init];
+    for(UIBarButtonItem* entry in self.navigationItem.rightBarButtonItems)
+        if(entry.action != @selector(toggleEncryption:))
+            [rightBarButtons addObject:entry];
+    self.navigationItem.rightBarButtonItems = rightBarButtons;
+#endif
+    
+    // Init search button item.
+    [self toggleEncryption:self];
+    [self initSearchButtonItem];
+    
+    //StarMessage
+    
+    /*
+             NSMutableArray *starMessageArray1 = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"starMessageArray"] mutableCopy];
+             for (int i = 0; i < starMessageArray1.count; i++) {
+                 NSMutableDictionary *mutableDict = [starMessageArray1 objectAtIndex:i];
+                 NSNumber* indexMessage = [[mutableDict objectForKey:@"messageDBId"] numberValue];//[starMessageArray1 objectAtIndex:i];
+                 if ([indexMessage isEqualToNumber:message.messageDBId]) {
+                     [starMessageArray1 removeObjectAtIndex:i];
+                     break;
+                 }
+             }
+             */
+//    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(connected:) name:kMLHasConnectedNotice object:nil];
+    //[self showActivityIndicator];
+    if ([[NSUserDefaults standardUserDefaults] objectForKey:@"starMessageId"] != nil) {
+        NSMutableDictionary *mutableDict = [[NSUserDefaults standardUserDefaults] objectForKey:@"starMessageId"];
+        //NSString *jid = @"enhanced-apk@chat.securesignal.in";
+        NSNumber* indexMessage = [mutableDict objectForKey:@"messageDBId"];
+        MLMessage* msg = [[DataLayer sharedInstance] messageForHistoryID:indexMessage];
+        NSString* contactJid = [mutableDict objectForKey:@"contactJid"];
+        // [mutableDict setObject:self.contact.contactJid forKey:@"contactJid"];
+        MLContact* StarContact = [MLContact createContactFromJid:contactJid andAccountNo:msg.accountId];
+        [self setupWithContact:StarContact];
+    }
+}
+
+-(void) refreshMessages:(NSNotification*) notification
+{
+
+    
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.messageTable reloadData];
+
+    });
+  
+}
+-(void) refresh:(NSNotification*) notification{
+    
+}
+
+-(void) handleSearchAppearance:(NSNotification *)notification{
+   
+    self.searchController.contact = self.contact;
+    if(!(self.searchController.isViewLoaded && self.searchController.view.window))
+        [self presentViewController:self.searchController animated:NO completion:nil];
+   
+     
+    
+}
+
+-(void) initNavigationBarItems
+{
+    UIView *cusView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 120, self.navigationController.navigationBar.frame.size.height)];
+    //cusView.backgroundColor = [UIColor redColor];
+ 
+    self.navBarIcon = [[UIImageView alloc] initWithFrame:CGRectMake(0, 7, 30, 30)];
+    self.navBarContactJid = [[UILabel alloc] initWithFrame:CGRectMake(38, 7, 200, 18)];
+    self.navBarLastInteraction = [[UILabel alloc] initWithFrame:CGRectMake(38, 26, 200, 12)];
+
+    [self.navBarContactJid setFont:[UIFont systemFontOfSize:15.0]];
+    [self.navBarLastInteraction setFont:[UIFont systemFontOfSize:10.0]];
+
+    [cusView addSubview:self.navBarIcon];
+    [cusView addSubview:self.navBarContactJid];
+    [cusView addSubview:self.navBarLastInteraction];
+    UITapGestureRecognizer* customViewTapRecognizer = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(commandIPressed:)];
+    [cusView addGestureRecognizer:customViewTapRecognizer];
+    self.navigationItem.leftBarButtonItems = @[[[UIBarButtonItem alloc] initWithCustomView:cusView]];
+    self.navigationItem.leftItemsSupplementBackButton = YES;
+    self.navigationItem.backBarButtonItem = [[UIBarButtonItem alloc ]initWithTitle:@"" style:UIBarButtonItemStylePlain target:self action:nil];
+}
+
+-(void) initLastMsgButton
+{
+    unichar arrowSymbol = 0x2193;
+    
+    self.lastMsgButton = [[UIButton alloc] init];
+    [self lastMsgButtonPositionConfigWithSize:self.inputContainerView.bounds.size];
+    self.lastMsgButton.layer.cornerRadius = lastMsgButtonSize/2;
+    self.lastMsgButton.layer.backgroundColor = [UIColor whiteColor].CGColor;
+    [self.lastMsgButton setTitleColor:[UIColor grayColor] forState:UIControlStateNormal];
+    [self.lastMsgButton setTitle:[NSString stringWithCharacters:&arrowSymbol length:1] forState:UIControlStateNormal];
+    self.lastMsgButton.titleLabel.font = [UIFont systemFontOfSize:30.0];
+    self.lastMsgButton.layer.borderColor = [UIColor grayColor].CGColor;
+    self.lastMsgButton.userInteractionEnabled = YES;
+    [self.lastMsgButton setHidden:YES];
+    [self.inputContainerView addSubview:self.lastMsgButton];
+    MLChatInputContainer* inputView = (MLChatInputContainer*) self.inputContainerView;
+    inputView.chatInputActionDelegate = self;
+}
+
+-(void) initAudioRecordButton
+{
+    self.longGestureRecognizer = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(recordMessageAudio:)];
+    self.longGestureRecognizer.minimumPressDuration = 0.8;
+    [self.audioRecordButton addGestureRecognizer:self.longGestureRecognizer];
+    
+    if (@available(iOS 13.0, *)) {
+        [self.audioRecordButton setImage:[UIImage systemImageNamed:@"mic"] forState:UIControlStateNormal];
+    } else {
+        [self.audioRecordButton setImage:[UIImage imageNamed:@"microphone"] forState:UIControlStateNormal];
+    }
+    self.audioRecordButton.tintColor = [UIColor monaldarkGreen];
+    [self.sendButton setHidden:YES];
+    self.isAudioMessage = YES;
+}
+
+-(void) lastMsgButtonPositionConfigWithSize:(CGSize)size
+{
+    float buttonXPos = self.inputContainerView.frame.origin.x + self.inputContainerView.frame.size.width - lastMsgButtonSize - 5;
+    float buttonYPos = self.inputContainerView.frame.origin.y - lastMsgButtonSize - 5;
+    self.lastMsgButton.frame = CGRectMake(buttonXPos, buttonYPos , lastMsgButtonSize, lastMsgButtonSize);
+}
+#pragma mark - ChatInputActionDelegage
+-(void)doScrollDownAction
+{
+    [self scrollToBottom];
+}
+
+#pragma mark - SearchViewController
+-(void) initSearchViewControler
+{
+    self.searchController = [[MLSearchViewController alloc] initWithSearchResultsController:nil];
+    [self.searchController setObscuresBackgroundDuringPresentation:NO];
+    self.searchController.searchResultDelegate = self;
+    self.searchController.jid = self.jid;
+    self.searchResultMessageList = [[NSMutableArray alloc] init];
+}
+
+-(void) initSearchButtonItem
+{
+  //  NSMutableArray* rightBarButtons = [[NSMutableArray alloc] init];
+ //   UIBarButtonItem* seachButton = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemSearch
+//                                                                                 target:self
+//                                                                                 action:@selector(showSeachButtonAction)];
+    UIBarButtonItem* audiocall = [[UIBarButtonItem alloc]initWithImage:[UIImage imageNamed:@"audioCall"] style:UIBarButtonItemStylePlain target:self action:@selector(audiocallPressed)];
+    UIBarButtonItem* videocall = [[UIBarButtonItem alloc]initWithImage:[UIImage imageNamed:@"videocall"] style:UIBarButtonItemStylePlain target:self action:@selector(videoCallPressed)];
+    NSMutableArray* rightBarButtons = [[NSMutableArray alloc] init];
+   
+    [rightBarButtons addObject:videocall];
+    [rightBarButtons addObject:audiocall];
+    
+   self.navigationItem.rightBarButtonItems = rightBarButtons;
+}
+
+-(void) audiocallPressed
+{
+//    UIStoryboard *contactDetails = [UIStoryboard storyboardWithName:@"ContactDetails" bundle:nil];
+//    CallViewController *callScreen = [contactDetails instantiateViewControllerWithIdentifier:@"CallScreen"];
+//    callScreen.contact = self.contact;
+//  // [self.navigationController pushViewController:callScreen animated:YES];
+//  [self presentViewController:callScreen animated:YES completion:nil];
+    UIAlertController* Alert = [UIAlertController alertControllerWithTitle:@"Update ✅"
+                                                                        message:@"This Update will be available soon , Will let you know once updated." preferredStyle:UIAlertControllerStyleAlert];
+    
+    [self presentViewController:Alert animated:YES completion:^{
+        dispatch_queue_t queue = dispatch_get_main_queue();
+        dispatch_after(1.0, queue, ^{
+            [Alert dismissViewControllerAnimated:YES completion:nil];
+        });
+    }];
+    
+}
+
+-(void) videoCallPressed
+{
+    UIAlertController* Alert = [UIAlertController alertControllerWithTitle:@"Update ✅"
+                                                                        message:@"This Update will be available soon , Will let you know once updated." preferredStyle:UIAlertControllerStyleAlert];
+    
+    [self presentViewController:Alert animated:YES completion:^{
+        dispatch_queue_t queue = dispatch_get_main_queue();
+        dispatch_after(1.0, queue, ^{
+            [Alert dismissViewControllerAnimated:YES completion:nil];
+        });
+    }];
+    
+    
+}
+-(void) showSeachButtonAction
+{
+    self.searchController.contact = self.contact;
+    if(!(self.searchController.isViewLoaded && self.searchController.view.window))
+        [self presentViewController:self.searchController animated:NO completion:nil];
+}
+
+-(void) dismissSearchViewControllerAction
+{
+
+    [self.searchController dismissViewControllerAnimated:NO completion:nil];
+}
+
+#pragma mark - SearchResultVCActionDelegate
+
+-(void) doGoSearchResultAction:(NSNumber*)nextDBId
+{
+    NSNumber* messagePathIdx = [self.searchController getMessageIndexPathForDBId:nextDBId];
+    if (messagePathIdx != nil)
+    {
+        long nextPathIdx = [messagePathIdx longValue];
+        NSIndexPath* msgIdxPath = [NSIndexPath indexPathForRow:nextPathIdx inSection:messagesSection];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.messageTable scrollToRowAtIndexPath:msgIdxPath atScrollPosition:UITableViewScrollPositionMiddle animated:NO];
+            MLBaseCell* selectedCell = [self.messageTable cellForRowAtIndexPath:msgIdxPath];
+            UIColor *originColor = [selectedCell.backgroundColor copy];
+            selectedCell.backgroundColor = [UIColor lightGrayColor];
+                        
+            [UIView animateWithDuration:0.2 delay:0.2 options:UIViewAnimationOptionCurveLinear animations:^{
+                selectedCell.backgroundColor = originColor;
+            } completion:nil];
+        });
+    }
+}
+
+-(void) doReloadHistoryForSearch
+{
+    [self loadOldMsgHistory];
+}
+
+- (void) doReloadActionForAllTableView
+{
+    [self.messageTable reloadData];
+    NSMutableArray* indexPaths = [[NSMutableArray alloc] init];
+    for (int idx = 0; idx<self.messageList.count; idx++)
+    {
+        MLMessage* msg = [self.messageList objectAtIndex:idx];
+        if ([msg.messageType isEqualToString:KMessageTypeReply]){
+            NSIndexPath* msgIdxPath = [NSIndexPath indexPathForRow:idx inSection:messagesSection];
+            [indexPaths addObject:msgIdxPath];
+        }
+    }
+    [self.messageTable reloadRowsAtIndexPaths:indexPaths withRowAnimation:UITableViewRowAnimationNone];
+}
+
+- (void) doGetMsgData
+{
+    for (int idx = 0; idx<self.messageList.count; idx++)
+    {
+        MLMessage* msg = [self.messageList objectAtIndex:idx];
+        [self doSetMsgPathIdx:idx withDBId:msg.messageDBId];
+    }
+}
+
+-(void) doSetNotLoadingHistory
+{
+    if (self.searchController.isActive)
+    {
+        self.searchController.isLoadingHistory = NO;
+        [self.searchController setResultToolBar];
+    }
+    [self doGetMsgData];
+}
+
+-(void)doShowLoadingHistory:(NSString *)title
+{
+    UIAlertController *loadingWarning = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Hint", @"")
+                                                                        message:title preferredStyle:UIAlertControllerStyleAlert];
+    
+    [self presentViewController:loadingWarning animated:YES completion:^{
+        dispatch_queue_t queue = dispatch_get_main_queue();
+        dispatch_after(2.0, queue, ^{
+            [loadingWarning dismissViewControllerAnimated:YES completion:nil];
+        });
+    }];
+}
+
+
+-(void) doSetMsgPathIdx:(NSInteger) pathIdx withDBId:(NSNumber *) messageDBId
+{
+    if(messageDBId)
+    {
+        [self.searchController setMessageIndexPath:[NSNumber numberWithInteger:pathIdx] withDBId:messageDBId];
+    }
+}
+
+-(BOOL) isContainKeyword:(NSNumber *) messageDBId
+{
+    if ([self.searchController getMessageIndexPathForDBId:messageDBId])
+    {
+        return YES;
+    }
+    return NO;
+}
+
+-(void) resetHistoryAttributeForCell:(MLBaseCell*) cell
+{
+    if (!cell.messageBody.text) return;
+    
+    NSMutableAttributedString *defaultAttrString = [[NSMutableAttributedString alloc] initWithString:cell.messageBody.text];
+    NSInteger textLength = (cell.messageBody.text == nil) ? 0: cell.messageBody.text.length;
+    NSRange defaultTextRange = NSMakeRange(0, textLength);
+    [defaultAttrString addAttribute:NSBackgroundColorAttributeName value:[UIColor clearColor] range:defaultTextRange];
+    cell.messageBody.attributedText = defaultAttrString;
+    cell.textLabel.backgroundColor = [UIColor clearColor];
+}
+
+
+-(void) setChatInputHeightConstraints:(BOOL) hwKeyboardPresent
+{
+    if((!self.chatInputConstraintHWKeyboard) || (!self.chatInputConstraintSWKeyboard)) {
+        return;
+    }
+    // activate / disable constraints depending on keyboard type
+    self.chatInputConstraintHWKeyboard.active = hwKeyboardPresent;
+    self.chatInputConstraintSWKeyboard.active = !hwKeyboardPresent;
+
+    [self.inputContainerView layoutIfNeeded];
+}
+
+-(void) handleForeGround {
+    @synchronized(_localMLContactCache) {
+        [_localMLContactCache removeAllObjects];
+    }
+    [self refreshData];
+    [self reloadTable];
+}
+
+-(IBAction) toggleEncryption:(id)sender
+{
+#ifndef DISABLE_OMEMO
+    NSArray* devices = [self.xmppAccount.omemo knownDevicesForAddressName:self.contact.contactJid];
+  
+    [MLChatViewHelper<chatViewController*> toggleEncryptionForContact:self.contact withKnownDevices:devices withSelf:self afterToggle:^() {
+        //[self displayEncryptionStateInUI];
+    }];
+#endif
+}
+
+-(void) displayEncryptionStateInUI
+{
+    if(self.contact.isEncrypted)
+        [self.navBarEncryptToggleButton setImage:[UIImage imageNamed:@"744-locked-received"]];
+    else
+        [self.navBarEncryptToggleButton setImage:[UIImage imageNamed:@"745-unlocked"]];
+}
+
+-(void) refreshContact:(NSNotification*) notification
+{
+    @synchronized(_localMLContactCache) {
+        [_localMLContactCache removeAllObjects];
+    }
+    MLContact* contact = [notification.userInfo objectForKey:@"contact"];
+    if(self.contact && [self.contact isEqualToContact:contact])
+        [self updateUIElements];
+}
+
+-(void) updateUIElements
+{
+    if(!self.contact.accountId) return;
+
+    NSString* jidLabelText = nil;
+    BOOL sendButtonEnabled = NO;
+
+    NSString* contactDisplayName = self.contact.contactDisplayName;
+    if(!contactDisplayName)
+        contactDisplayName = @"";
+    
+    //send button is always enabled, except if the account is permanently disabled
+    sendButtonEnabled = YES;
+    if(![[DataLayer sharedInstance] isAccountEnabled:self.contact.accountId])
+        sendButtonEnabled = NO;
+    
+    jidLabelText = contactDisplayName;
+
+    
+
+    if(self.contact.isGroup)
+    {
+       
+        NSArray* members = [[DataLayer sharedInstance] getMembersAndParticipantsOfMuc:self.contact.contactJid forAccountId:self.xmppAccount.accountNo];
+        if(members.count > 0)
+            jidLabelText = [NSString stringWithFormat:@"%@ (%ld)", contactDisplayName, members.count];
+     //   xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+        //[MLMucProcessor sendDiscoQueryFor:self.contact.contactJid onAccount:account withJoin:YES andBookmarksUpdate:YES];
+    }
+    
+    // change text values
+    dispatch_async(dispatch_get_main_queue(), ^{
+//        xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+//        if(self.contact.isGroup){
+//            [account moderatorMsgSubscriberoom:self.contact.contactJid];
+//        }
+//        [account fetchBuddiesAvatar:self.contact.contactJid];
+        self.navBarContactJid.text = jidLabelText;
+        [[MLImageManager sharedInstance] getIconForContact:self.contact.contactJid andAccount:self.contact.accountId withCompletion:^(UIImage *image) {
+            if (!image){
+                if (self.contact.isGroup){
+                    self.navBarIcon.image = [MLImageManager circularImage:[UIImage imageNamed:@"noicon_muc"]];
+                }else{
+                    
+                }
+               
+            }else{
+                self.navBarIcon.image=image;
+            }
+                   
+          }];
+        self.sendButton.enabled = sendButtonEnabled;
+    });
+}
+
+-(void) updateUIElementsOnAccountChange:(NSNotification* _Nullable) notification
+{
+    if(notification)
+    {
+        NSDictionary* userInfo = notification.userInfo;
+        // Check if all objects of the notification are present
+        NSString* accountNo = [userInfo objectForKey:kAccountID];
+        NSNumber* accountState = [userInfo objectForKey:kAccountState];
+
+        // Only parse account changes for our current opened account
+        if(![accountNo isEqualToString:self.xmppAccount.accountNo])
+            return;
+
+        if(accountNo && accountState)
+            [self updateUIElements];
+    }
+    else
+    {
+        [self updateUIElements];
+    }
+}
+
+-(void) stopLastInteractionTimer
+{
+    if(_cancelLastInteractionTimer)
+        _cancelLastInteractionTimer();
+    _cancelLastInteractionTimer = nil;
+}
+
+-(void) handleMessageUpdate {
+    dispatch_async(dispatch_get_main_queue(), ^{
+    self.navBarLastInteraction.text = @"Updating Message..";
+    });
+}
+
+-(void) handleMessageStoreUpdate {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self updateNavBarLastInteractionLabel:nil];
+    });
+}
+
+-(void) updateNavBarLastInteractionLabel:(NSNotification*) notification
+{
+    NSDate* lastInteractionDate = nil;
+    NSString* jid = self.contact.contactJid;
+    NSString* accountNo = self.contact.accountId;
+    // use supplied data from notification...
+    if(notification)
+    {
+        NSDictionary* data = notification.userInfo;
+        if(![jid isEqualToString:data[@"jid"]] || ![accountNo isEqualToString:data[@"accountNo"]])
+            return;     // ignore other accounts or contacts
+        if([data[@"isTyping"] boolValue] == YES)
+        {
+            [self stopLastInteractionTimer];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self.navBarLastInteraction.text = NSLocalizedString(@"Typing...", @"");
+            });
+            return;
+        }
+        lastInteractionDate = data[@"lastInteraction"];     // this is nil for a "not typing" (aka typing ended) notification --> "online"
+    }
+    // ...or load the latest interaction timestamp from db
+    else
+        lastInteractionDate = [[DataLayer sharedInstance] lastInteractionOfJid:jid forAccountNo:accountNo];
+    
+    // make timestamp human readable (lastInteractionDate will be captured by this block and automatically used by our timer)
+    NSMutableString* memberList =  [[NSMutableString alloc] init];
+      if (self.contact.isGroup) {
+          self.members = [[DataLayer sharedInstance] getMembersAndParticipantsOfMuc:self.contact.contactJid forAccountId:self.contact.accountId];
+                  NSArray* accountList = [[DataLayer sharedInstance] accountList];
+                  NSString *myjid = [NSString stringWithFormat:@"%@@%@",[[accountList objectAtIndex:0] objectForKey:@"username"],[[accountList objectAtIndex:0] objectForKey:@"domain"]];
+                  [self.members enumerateObjectsUsingBlock:^(id object, NSUInteger idx, BOOL *stop) {
+                      if ((int)idx > 0) {
+                              [memberList appendString:@", "];
+                      }
+                      NSDictionary *member = object;
+                      NSString *jid = [[member objectForKey:@"participant_jid"] componentsSeparatedByString:@"@"][0].capitalizedString;
+                      if (jid == nil){
+                                 jid = [[member objectForKey:@"member_jid"] componentsSeparatedByString:@"@"][0].capitalizedString;
+                             }
+                      NSString *affiliation = [member objectForKey:@"affiliation"];
+                      NSLog(@"%@", affiliation);
+//
+                      
+                      
+                    if ([jid isEqualToString:myjid] && ([affiliation isEqualToString:@"owner"] || [affiliation isEqualToString:@"admin"])){
+                        
+                        [memberList appendString:@"You"];
+                    } else {
+                        [memberList appendString:jid];
+                    }
+                  }];
+      }
+      
+     
+
+    monal_void_block_t __block updateTime = ^{
+        DDLogVerbose(@"LastInteraction updateTime() called");
+        NSString* lastInteractionString = [HelperTools formatLastInteraction:lastInteractionDate];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.contact.isGroup) {
+                if (self.members.count > 0){
+                    self.navBarLastInteraction.text = memberList;
+                }else{
+                    xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+                    [MLMucProcessor fetchMembersList:self.contact.contactJid onAccount:account];
+                }
+                
+            } else {
+                self.navBarLastInteraction.text = lastInteractionString;
+            }
+           // self.navBarLastInteraction.text = lastInteractionString;
+        });
+        
+        [self stopLastInteractionTimer];
+        // this timer will be called only if needed
+        if(lastInteractionDate && lastInteractionDate.timeIntervalSince1970 > 0)
+            _cancelLastInteractionTimer = createTimer(60, updateTime);
+    };
+    updateTime();
+}
+
+-(void) viewWillAppear:(BOOL)animated
+{
+    [super viewWillAppear:animated];
+    
+    [self initSearchViewControler];
+
+
+    //throw on empty contacts
+    NSAssert(self.contact.contactJid, @"can not open chat for empty contact jid");
+    NSAssert(self.contact.accountId, @"can not open chat for empty account id");
+//
+    
+    NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+    [nc addObserver:self selector:@selector(handleNewMessage:) name:kMonalNewMessageNotice object:nil];
+    [nc addObserver:self selector:@selector(handleSearchAppearance:) name:kMonalchatSearch object:nil];
+    [nc addObserver:self selector:@selector(handleDeletedMessage:) name:kMonalDeletedMessageNotice object:nil];
+    [nc addObserver:self selector:@selector(handleSentMessage:) name:kMonalSentMessageNotice object:nil];
+    [nc addObserver:self selector:@selector(handleMessageError:) name:kMonalMessageErrorNotice object:nil];
+    
+    
+    [nc addObserver:self selector:@selector(dismissKeyboard:) name:UIApplicationDidEnterBackgroundNotification object:nil];
+    [nc addObserver:self selector:@selector(handleForeGround) name:kMonalRefresh object:nil];
+    
+    [nc addObserver:self selector:@selector(keyboardDidShow:) name:UIKeyboardDidShowNotification object:nil];
+    [nc addObserver:self selector:@selector(keyboardDidHide:) name:UIKeyboardDidHideNotification object:nil];
+    [nc addObserver:self selector:@selector(keyboardWillShow:) name:UIKeyboardWillShowNotification object:nil];
+    [nc addObserver:self selector:@selector(keyboardWillDisappear:) name:UIKeyboardWillHideNotification object:nil];
+    
+    [nc addObserver:self selector:@selector(handleReceivedMessage:) name:kMonalMessageReceivedNotice object:nil];
+    [nc addObserver:self selector:@selector(handleDisplayedMessage:) name:kMonalMessageDisplayedNotice object:nil];
+    [nc addObserver:self selector:@selector(handleFiletransferMessageUpdate:) name:kMonalMessageFiletransferUpdateNotice object:nil];
+    
+    [nc addObserver:self selector:@selector(refreshContact:) name:kMonalContactRefresh object:nil];
+    [nc addObserver:self selector:@selector(updateUIElementsOnAccountChange:) name:kMonalAccountStatusChanged object:nil];
+    [nc addObserver:self selector:@selector(updateNavBarLastInteractionLabel:) name:kMonalLastInteractionUpdatedNotice object:nil];
+    
+    [nc addObserver:self selector:@selector(handleBackgroundChanged) name:kMonalBackgroundChanged object:nil];
+    
+    
+    //ForMessageUpdate
+    [nc addObserver:self selector:@selector(handleMessageUpdate) name:kMonalUpdateMessageNotice object:nil];
+    [nc addObserver:self selector:@selector(handleMessageStoreUpdate) name:kMonalStoreMessageNotice object:nil];
+
+    self.viewDidAppear = NO;
+    self.viewIsScrolling = YES;
+    //stop editing (if there is some)
+    [self stopEditing];
+    self.xmppAccount = [[MLXMPPManager sharedInstance] getConnectedAccountForID:self.contact.accountId];
+    if(!self.xmppAccount) DDLogDebug(@"Disabled account detected");
+    
+    [MLNotificationManager sharedInstance].currentContact = self.contact;
+    
+    [self handleForeGround];
+    [self updateUIElements];
+    [self updateNavBarLastInteractionLabel:nil];
+    [self displayEncryptionStateInUI];
+    
+    //does not become first responder like in iOS
+
+    [self updateBackground:NO];
+    self.placeHolderText.text = [NSString stringWithFormat:@"Send Message"];
+    self.placeHolderText.textColor = [UIColor monaldarkGreen];
+    // Load message draft from db
+    NSString* messageDraft = [[DataLayer sharedInstance] loadMessageDraft:self.contact.contactJid forAccount:self.contact.accountId];
+    if(messageDraft && [messageDraft length] > 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.chatInput.text = messageDraft;
+            self.placeHolderText.hidden = YES;
+        });
+    }
+    self.hardwareKeyboardPresent = YES; //default to YES and when keybaord will appears is called, this may be set to NO
+    
+    [self.chatInput resignFirstResponder];
+    // Set correct chatInput height constraints
+    [self setChatInputHeightConstraints:self.hardwareKeyboardPresent];
+    [self scrollToBottom];
+
+    [self tempfreezeAutoloading];
+    
+    //LoadStarMessage
+    [self reloadStarMessage];
+    
+    
+#if TARGET_OS_MACCATALYST
+    //does not become first responder like in iOS
+    [self.view addSubview:self.inputContainerView];
+
+    [self.inputContainerView.leadingAnchor constraintEqualToAnchor:self.inputContainerView.superview.leadingAnchor].active=YES;
+    [self.inputContainerView.bottomAnchor constraintEqualToAnchor:self.inputContainerView.superview.bottomAnchor].active=YES;
+    [self.inputContainerView.trailingAnchor constraintEqualToAnchor:self.inputContainerView.superview.trailingAnchor].active=YES;
+    self.tableviewBottom.constant += 20;
+#endif
+    
+    BOOL didCreategroup = [[NSUserDefaults standardUserDefaults] valueForKey:@"is_Group_created"];
+    
+    if (didCreategroup == YES){
+        [[NSUserDefaults standardUserDefaults] setBool:NO forKey:@"is_Group_created"];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"is_Group_created"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+        [self.view addSubview:self.inputContainerView];
+
+        [self.inputContainerView.leadingAnchor constraintEqualToAnchor:self.inputContainerView.superview.leadingAnchor].active=YES;
+        [self.inputContainerView.bottomAnchor constraintEqualToAnchor:self.inputContainerView.superview.bottomAnchor].active=YES;
+        [self.inputContainerView.trailingAnchor constraintEqualToAnchor:self.inputContainerView.superview.trailingAnchor].active=YES;
+        self.tableviewBottom.constant += 20;
+    }
+   
+}
+
+-(void) reloadStarMessage {
+    if ([[NSUserDefaults standardUserDefaults] objectForKey:@"starMessageId"] != nil) {
+        NSMutableDictionary *mutableDict = [[NSUserDefaults standardUserDefaults] objectForKey:@"starMessageId"];
+        NSNumber* indexMessage = [mutableDict objectForKey:@"messageDBId"];
+        [self doGoSearchResultAction:indexMessage];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"starMessageId"];
+    }
+}
+
+
+-(void) viewDidAppear:(BOOL)animated
+{
+    [super viewDidAppear:animated];
+#ifndef DISABLE_OMEMO
+    if(self.xmppAccount) {
+        BOOL omemoDeviceForContactFound = [self.xmppAccount.omemo knownDevicesForAddressNameExist:self.contact.contactJid];
+        if(!omemoDeviceForContactFound) {
+            if(self.contact.isEncrypted && [[DataLayer sharedInstance] isAccountEnabled:self.xmppAccount.accountNo]) {
+                UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Encryption Not Supported", @"") message:NSLocalizedString(@"This contact does not appear to have any devices that support encryption.", @"") preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Disable Encryption", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                    // Disable encryption
+                    self.contact.isEncrypted = NO;
+                    [self updateUIElements];
+                    [[DataLayer sharedInstance] disableEncryptForJid:self.contact.contactJid andAccountNo:self.contact.accountId];
+                    [alert dismissViewControllerAnimated:YES completion:nil];
+                }]];
+                [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Ignore", @"") style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+                    [alert dismissViewControllerAnimated:YES completion:nil];
+                }]];
+            }
+        }
+        [self toggleEncryption:self];
+    }
+#endif
+    [self refreshCounter];
+    self.hardwareKeyboardPresent = YES;
+    //init the floating last message button
+    [self initLastMsgButton];
+
+    self.viewDidAppear = YES;
+    xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+    if (self.contact.isGroup){
+           NSString *groupKey =[[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+           if (groupKey == nil ){
+               [self SessionKeyGenerate];
+           }
+       
+    }else{
+            [account.omemo sendOMEMODeviceWithForce:YES];
+        }
+    
+      
+        [account fetchBuddiesAvatar:self.contact.contactJid];
+//        [self.view addSubview:self.inputContainerView];
+//
+//        [self.inputContainerView.leadingAnchor constraintEqualToAnchor:self.inputContainerView.superview.leadingAnchor].active=YES;
+//        [self.inputContainerView.bottomAnchor constraintEqualToAnchor:self.inputContainerView.superview.bottomAnchor].active=YES;
+//        [self.inputContainerView.trailingAnchor constraintEqualToAnchor:self.inputContainerView.superview.trailingAnchor].active=YES;
+//        self.tableviewBottom.constant += 20;
+
+}
+
+-(void) viewWillDisappear:(BOOL)animated
+{
+    //stop editing (if there is some)
+    [self stopEditing];
+    
+    NSNotificationCenter* nc = [NSNotificationCenter defaultCenter];
+    [nc removeObserver:self];
+
+    // Save message draft
+    BOOL success = [self saveMessageDraft];
+    if(success) {
+        // Update status message for contact to show current draft
+        [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+    }
+    [super viewWillDisappear:animated];
+    [MLNotificationManager sharedInstance].currentContact = nil;
+    
+    [self sendChatState:NO];
+    [self stopLastInteractionTimer];
+    
+    [_lastMsgButton removeFromSuperview];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    if(self.messageTable.contentSize.height > self.messageTable.bounds.size.height)
+        [self.messageTable setContentOffset:CGPointMake(0, self.messageTable.contentSize.height - self.messageTable.bounds.size.height) animated:NO];
+}
+
+-(BOOL) saveMessageDraft
+{
+    // Save message draft
+    return [[DataLayer sharedInstance] saveMessageDraft:self.contact.contactJid forAccount:self.contact.accountId withComment:self.chatInput.text];
+}
+
+-(void) dealloc
+{
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [self stopLastInteractionTimer];
+}
+
+-(void) handleBackgroundChanged
+{
+    [self updateBackground:YES];
+}
+
+-(void) updateBackground:(BOOL) forceReload
+{
+    BOOL backgrounds = [[HelperTools defaultsDB] boolForKey:@"ChatBackgrounds"];
+    
+    if(backgrounds){
+        self.backgroundImage.hidden = NO;
+        NSString* imageName = [[HelperTools defaultsDB] objectForKey:@"BackgroundImage"];
+        if(imageName)
+        {
+            if([imageName isEqualToString:@"CUSTOM"])
+            {
+                self.backgroundImage.image = [[MLImageManager sharedInstance] getBackground:forceReload];
+            } else  {
+                self.backgroundImage.image = [UIImage imageNamed:imageName];
+            }
+        }
+        self.transparentLayer.hidden = NO;
+    } else {
+        self.backgroundImage.hidden = YES;
+        self.transparentLayer.hidden = YES;
+    }
+}
+
+#pragma mark rotation
+-(void) viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)coordinator
+{
+    [self stopEditing];
+    [self.chatInput resignFirstResponder];
+    
+    [coordinator animateAlongsideTransition:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+    } completion:^(id<UIViewControllerTransitionCoordinatorContext> context) {
+        //[self lastMsgButtonPositionConfigWithSize:self.inputContainerView.bounds.size];
+        [self lastMsgButtonPositionConfigWithSize:size];
+    }];
+}
+
+#pragma mark gestures
+
+-(IBAction)dismissKeyboard:(id)sender
+{
+    [self stopEditing];
+    [self saveMessageDraft];
+    [self.chatInput resignFirstResponder];
+    [self sendChatState:NO];
+}
+
+#pragma mark message signals
+
+-(void) refreshCounter
+{
+    if(self.navigationController.topViewController == self)
+    {
+        if(![self.contact isEqualToContact:[MLNotificationManager sharedInstance].currentContact])
+            return;
+        
+        if(![HelperTools isNotInFocus])
+        {
+            //get list of unread messages
+            NSArray* unread = [[DataLayer sharedInstance] markMessagesAsReadForBuddy:self.contact.contactJid andAccount:self.contact.accountId tillStanzaId:nil wasOutgoing:NO];
+            
+            //send displayed marker for last unread message (XEP-0333)
+            //but only for 1:1 or group-type mucs,not for channe-type mucs (privacy etc.)
+            MLMessage* lastUnreadMessage = [unread lastObject];
+            if(lastUnreadMessage && (!self.contact.isGroup || [@"group" isEqualToString:self.contact.mucType]))
+            {
+                DDLogDebug(@"Sending XEP-0333 displayed marker for message '%@'", lastUnreadMessage.messageId);
+                [self.xmppAccount sendDisplayMarkerForMessage:lastUnreadMessage];
+            }
+            
+            //remove notifications of all read messages (this will cause the MLNotificationManager to update the app badge, too)
+            [[MLNotificationQueue currentQueue] postNotificationName:kMonalDisplayedMessagesNotice object:self.xmppAccount userInfo:@{@"messagesArray":unread}];
+            
+            // update unread counter
+            self.contact.unreadCount -= unread.count;
+            if(self.contact.unreadCount < 0)
+                self.contact.unreadCount = 0;
+
+            //refresh contact in active contacts view
+            [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+        }
+        else
+            DDLogDebug(@"Not marking messages as read because we are still in background: %@ notInFokus: %@", [HelperTools isInBackground] ? @"YES" : @"NO", [HelperTools isNotInFocus] ? @"YES" : @"NO");
+    }
+}
+
+-(void) refreshData
+{
+    if(!self.contact.contactJid)
+        return;
+
+    NSMutableArray<MLMessage*>* messages = [[DataLayer sharedInstance] messagesForContact:self.contact.contactJid forAccount: self.contact.accountId];
+    NSNumber* unreadMsgCnt = [[DataLayer sharedInstance] countUserUnreadMessages:self.contact.contactJid forAccount: self.contact.accountId];
+    
+    if([unreadMsgCnt integerValue] == 0)
+        self->_firstmsg=YES;
+    
+    if(!self.jid)
+        return;
+    
+    //TODO: use a factory method for this!!
+    MLMessage* unreadStatus = [[MLMessage alloc] init];
+    unreadStatus.messageType = kMessageTypeStatus;
+    unreadStatus.messageText = NSLocalizedString(@"Unread Messages Below", @"");
+    unreadStatus.actualFrom = self.jid;
+    unreadStatus.isMuc = self.contact.isGroup;
+    
+    NSInteger unreadPos = messages.count - 1;
+    while(unreadPos >= 0)
+    {
+        MLMessage* row = [messages objectAtIndex:unreadPos];
+        if(!row.unread)
+        {
+            unreadPos++; //move back down one
+            break;
+        }
+        unreadPos--; //move up the list
+    }
+
+    if(unreadPos <= messages.count - 1 && unreadPos > 0) {
+        [messages insertObject:unreadStatus atIndex:unreadPos];
+    }
+
+    self.messageList = messages;
+    [self doSetNotLoadingHistory];
+    [self refreshCounter];
+}
+
+-(void) SessionKeyGenerate{
+    xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+    [self groupSessionHUD];
+    MLECDHKeyExchange *ecdh = [[MLECDHKeyExchange alloc]init];
+    
+    NSArray* accountList = [[DataLayer sharedInstance] accountList];
+    NSString *myjid = [NSString stringWithFormat:@"%@@%@",[[accountList objectAtIndex:0] objectForKey:@"username"],[[accountList objectAtIndex:0] objectForKey:@"domain"]];
+    NSArray* members = [[DataLayer sharedInstance] getMembersAndParticipantsOfMuc:self.contact.contactJid forAccountId:self.xmppAccount.accountNo];
+    [members enumerateObjectsUsingBlock:^(id object, NSUInteger idx, BOOL *stop) {
+        NSDictionary *member = object;
+        NSString *jid = member[@"participant_jid"];
+        if (jid == nil){
+            jid = member[@"member_jid"];
+        }
+        if (![jid isEqualToString:myjid]){
+            NSString *message = [ecdh requestKeyWithGroupJid:self.contact.contactJid];
+
+            MLContact *inviteContact = [MLContact createContactFromJid:jid andAccountNo:account.accountNo];
+            [[MLXMPPManager sharedInstance] sendMessage:message toContact:inviteContact isEncrypted:YES isUpload:NO messageId:[[NSUUID UUID] UUIDString]
+                                     withCompletionHandler:nil];
+        }
+    }];
+    [self hideUploadHUD];
+}
+
+#pragma mark - textview
+-(void) sendMessage:(NSString*) messageText withType:(NSString*) messageType
+{
+    [self sendMessage:messageText andMessageID:nil withType:messageType];
+}
+
+-(void) sendMessage:(nonnull NSString*) messageText andMessageID:(NSString*) messageID withType:(NSString*) messageType
+{
+    DDLogVerbose(@"Sending message");
+    NSString* newMessageID = messageID ? messageID:[[NSUUID UUID] UUIDString];
+    //dont readd it, use the exisitng
+    NSDictionary* accountDict = [[DataLayer sharedInstance] detailsForAccount:self.contact.accountId];
+    if(!accountDict)
+    {
+        DDLogError(@"Account not found!");
+        return;
+    }
+
+    if(!messageID && !messageType) {
+        DDLogError(@"message id and type both cant be empty");
+        return;
+    }
+    
+    if(!messageID)
+    {
+        [self addMessageto:self.contact.contactJid withMessage:messageText andId:newMessageID messageType:messageType mimeType:nil size:nil];
+        if (self.contact.isGroup){
+            NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+            if (groupKey == nil ) {
+                  [self SessionKeyGenerate];
+                UIAlertController *loadingWarning = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Hint", @"")
+                                                                                    message:@"Waiting for the Key response" preferredStyle:UIAlertControllerStyleAlert];
+                
+                [self presentViewController:loadingWarning animated:YES completion:^{
+                    dispatch_queue_t queue = dispatch_get_main_queue();
+                    dispatch_after(2.0, queue, ^{
+                        [loadingWarning dismissViewControllerAnimated:YES completion:nil];
+                    });
+                }];
+                return;
+             }
+            MLECDHKeyExchange *ecdh = [[MLECDHKeyExchange alloc]init];
+            NSData *groupAAD = [self.contact.contactJid dataUsingEncoding:NSUTF8StringEncoding];
+             NSData *plainData = [messageText dataUsingEncoding:NSUTF8StringEncoding];
+          //  NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+            NSData *keyData = [[NSData alloc]
+                               initWithBase64EncodedString:groupKey options:0];
+          if ( keyData == nil) {
+               
+              keyData = [HelperTools dataWithBase64EncodedString:groupKey];
+           }
+            //[HelperTools dataWithBase64EncodedString:groupKey];
+            NSData *ivData = [AESGcm genIV];
+            NSData *encrypted_payload = [ecdh aesMessageEncryptWithMessageData:plainData key:keyData iv:ivData AAD:groupAAD];
+            NSMutableData *encryptedpayload = [NSMutableData dataWithData:ivData];
+            [encryptedpayload appendData:encrypted_payload];
+            NSString *base64cipher = [encryptedpayload base64EncodedStringWithOptions:0];
+            
+            NSLog(@"base64cipher Message %@",base64cipher);
+
+            [[MLXMPPManager sharedInstance] sendMessage:base64cipher toContact:self.contact isEncrypted:NO isUpload:NO messageId:newMessageID
+                                     withCompletionHandler:nil];
+        }else{
+            [[MLXMPPManager sharedInstance] sendMessage:messageText toContact:self.contact isEncrypted:self.contact.isEncrypted isUpload:NO messageId:newMessageID
+                                     withCompletionHandler:nil];
+        }
+      
+        [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+    }
+    else
+    {
+        [[MLXMPPManager sharedInstance]
+                      sendMessage:messageText
+                        toContact:self.contact
+                      isEncrypted:self.contact.isEncrypted
+                         isUpload:NO
+                        messageId:newMessageID
+            withCompletionHandler:nil
+        ];
+    }
+
+    [[MLNotificationQueue currentQueue] postNotificationName:kMLMessageSentToContact object:self userInfo:@{@"contact":self.contact}];
+}
+
+- (NSString *)getJSONOfObject:(id)dataObject {
+ 
+    NSError *error;
+    NSData *jsonData = [ NSJSONSerialization dataWithJSONObject:dataObject options:NSJSONWritingPrettyPrinted error:&error ];
+    
+    if (! jsonData) {
+        NSLog(@"%s: error: %@", __func__, error.localizedDescription);
+        return @"{}";
+    } else {
+        return [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+    }
+}
+-(void) sendChatState:(BOOL) isTyping
+{
+    if(!self.sendButton.enabled)
+    {
+        DDLogWarn(@"Account disabled, ignoring chatstate update");
+        return;
+    }
+    
+    // Do not send when the user disabled the feature
+    if(!self.sendLastChatState)
+        return;
+
+    if(isTyping != _isTyping)       //changed state? --> send typing notification
+    {
+        DDLogVerbose(@"Sending chatstate isTyping=%@", isTyping ? @"YES" : @"NO");
+        [[MLXMPPManager sharedInstance] sendChatState:isTyping fromAccount:self.contact.accountId toJid:self.contact.contactJid];
+    }
+    
+    //set internal state
+    _isTyping = isTyping;
+    
+    //cancel old timer if existing
+    if(_cancelTypingNotification)
+        _cancelTypingNotification();
+    
+    //start new timer if we are currently typing
+    if(isTyping)
+        _cancelTypingNotification = createTimer(5.0, (^{
+            //no typing interaction in 5 seconds? --> send out active chatstate (e.g. typing ended)
+            if(_isTyping)
+            {
+                _isTyping = NO;
+                DDLogVerbose(@"Sending chatstate isTyping=NO");
+                [[MLXMPPManager sharedInstance] sendChatState:NO fromAccount:self.contact.accountId toJid:self.contact.contactJid];
+            }
+        }));
+}
+- (IBAction)ReplyDismiss:(id)sender {
+    self.uploadMenuConstraint.constant = 1;
+      self.uploadMenuView.hidden = YES;
+        [self.ReplyView setHidden:YES];
+         [self.ReplytextLabel setHidden:YES];
+         [self.ReplymediaView setHidden:YES];
+}
+
+-(void) resignTextView
+{
+    [self tempfreezeAutoloading];
+
+    // Trim leading spaces
+    NSString* cleanString = [self.chatInput.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    // Only send msg that have at least one character
+    
+    if (!self.ReplyView.isHidden){
+        self.uploadMenuConstraint.constant = 1;
+          self.uploadMenuView.hidden = YES;
+          [self.ReplyView setHidden:YES];
+          [self.ReplytextLabel setHidden:YES];
+          [self.ReplymediaView setHidden:YES];
+          cleanString = [NSString stringWithFormat:@"%@%@",self.replyMessageText,cleanString];
+        self.replyMessageText = Nil;
+    }
+    if(cleanString.length > 0)
+    {
+        // Reset chatInput -> remove draft from db so that macOS will show the newly sent message
+        [self.chatInput setText:@""];
+        [self saveMessageDraft];
+        
+        [self setSendButtonIconWithTextLength:0];
+        
+        if(self.editingCallback)
+            self.editingCallback(cleanString);
+        else
+        {
+            // Send trimmed message
+            NSString* lowercaseCleanString = [cleanString lowercaseString];
+            if([lowercaseCleanString rangeOfString:@" "].location == NSNotFound && [lowercaseCleanString hasPrefix:@"https://"])
+                [self sendMessage:cleanString withType:kMessageTypeUrl];
+            else if ([lowercaseCleanString hasPrefix:KMessageTypeReply])
+                [self sendMessage:cleanString withType:KMessageTypeReply];
+            else
+                [self sendMessage:cleanString withType:kMessageTypeText];
+        }
+    }
+    [self sendChatState:NO];
+    [self emptyUploadQueue];
+}
+
+-(IBAction) sendMessageText:(id)sender
+{
+    [self resignTextView];
+}
+
+-(void) recordMessageAudio:(UILongPressGestureRecognizer*)gestureRecognizer{
+    [[AVAudioSession sharedInstance] requestRecordPermission:^(BOOL granted) {
+            if (granted) {
+                if (gestureRecognizer.state == UIGestureRecognizerStateBegan){
+                    [[MLAudioRecoderManager sharedInstance] setRecoderManagerDelegate:self];
+                    [[MLAudioRecoderManager sharedInstance] start];
+                } else if (gestureRecognizer.state == UIGestureRecognizerStateEnded){
+                    [[MLAudioRecoderManager sharedInstance] stop];
+                }
+            } else {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    UIAlertController *messageAlert =[UIAlertController alertControllerWithTitle:NSLocalizedString(@"Please Allow Audio Access",@ "") message:NSLocalizedString(@"If you want to use audio message you will need to allow access in Settings-> Privacy-> Microphone.",@ "") preferredStyle:UIAlertControllerStyleAlert];
+                    
+                    UIAlertAction *closeAction =[UIAlertAction actionWithTitle:NSLocalizedString(@"Close",@ "") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+                        
+                    }];
+                    
+                    [messageAlert addAction:closeAction];
+                    [self presentViewController:messageAlert animated:YES completion:nil];
+                });
+            }
+    }];
+}
+
+-(BOOL) shouldPerformSegueWithIdentifier:(NSString*) identifier sender:(id) sender
+{
+    if([identifier isEqualToString:@"showDetails"])
+    {
+        //don't show contact details for mucs (they will get their own muc details later on)
+        if(self.contact.isGroup)
+            return NO;
+    }
+    return YES;
+}
+
+//this is needed to prevent segues invoked programmatically
+-(void) performSegueWithIdentifier:(NSString*) identifier sender:(id) sender
+{
+    if([self shouldPerformSegueWithIdentifier:identifier sender:sender] == NO)
+    {
+//        if([identifier isEqualToString:@"showDetails"])
+//        {
+//            // Display warning
+//            UIAlertController* groupDetailsWarning = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Groupchat/channel details", @"")
+//                                                                                message:NSLocalizedString(@"Groupchat/channel details are currently not implemented in Monal.", @"") preferredStyle:UIAlertControllerStyleAlert];
+//            [groupDetailsWarning addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Ok", @"") style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+//                [groupDetailsWarning dismissViewControllerAnimated:YES completion:nil];
+//            }]];
+//            [self presentViewController:groupDetailsWarning animated:YES completion:nil];
+//        }
+//        return;
+    }
+    [super performSegueWithIdentifier:identifier sender:sender];
+}
+
+
+-(void) prepareForSegue:(UIStoryboardSegue*) segue sender:(id) sender
+{
+    [self sendChatState:NO];
+
+    if([segue.identifier isEqualToString:@"showDetails"])
+    {
+        UINavigationController *nav = segue.destinationViewController;
+        ContactDetails* details = (ContactDetails *)nav.topViewController;
+        details.contact = self.contact;
+        details.completion = ^{
+            [self viewWillAppear:YES];
+        };
+    }
+}
+
+
+#pragma mark - doc picker
+-(IBAction) attachfile:(id)sender
+{
+    [self stopEditing];
+    [self.chatInput resignFirstResponder];
+    
+    [self presentViewController:self.filePicker animated:YES completion:nil];
+    
+    return;
+}
+
+-(void) documentPicker:(UIDocumentPickerViewController*) controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls
+{
+    if(urls.count == 0)
+        return;
+
+    [self addDocumentsToQueue:urls];
+}
+
+
+#pragma - mark ContactpickerDelegate
+
+- (void) contactPicker:(CNContactPickerViewController *)picker
+didSelectContact:(CNContact *)contact {
+    [self getContactDetails:contact];
+}
+
+-(void)getContactDetails:(CNContact *)contactObject {
+    NSLog(@"NAME PREFIX :: %@",contactObject.namePrefix);
+    NSLog(@"NAME SUFFIX :: %@",contactObject.nameSuffix);
+    NSLog(@"FAMILY NAME :: %@",contactObject.familyName);
+    NSLog(@"GIVEN NAME :: %@",contactObject.givenName);
+    NSLog(@"MIDDLE NAME :: %@",contactObject.middleName);
+    NSString * fullName = [NSString stringWithFormat:@"%@ %@",contactObject.givenName,contactObject.familyName];
+    NSLog(@"Full Name :: %@",fullName);
+    NSString *Contact = fullName;
+  //  if(contactObject.imageData) {
+  //  NSData * imageData = (NSData *)contactObject.imageData;
+//    UIImage * contactImage = [[UIImage alloc] initWithData:imageData];
+//
+//    }
+    NSString * phone = @"";
+    NSString * userPHONE_NO = @"";
+       
+    for(CNLabeledValue * phonelabel in contactObject.phoneNumbers) {
+    CNPhoneNumber * phoneNo = phonelabel.value;
+    phone = [phoneNo stringValue];
+    if (phone) {
+    userPHONE_NO = phone;
+        Contact = [NSString stringWithFormat:@"%@\n%@", Contact,userPHONE_NO];
+    }}
+    NSString * email = @"";
+    NSString * userEMAIL_ID = @"";
+    for(CNLabeledValue * emaillabel in contactObject.emailAddresses) {
+    email = emaillabel.value;
+    if (email) {
+    userEMAIL_ID = email;
+    }}
+    NSLog(@"PHONE NO :: %@",userPHONE_NO);
+    NSLog(@"EMAIL ID :: %@",userEMAIL_ID);
+      
+    NSString* messageID = [[NSUUID UUID] UUIDString];
+    if (self.contact.isGroup){
+        
+        NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+        
+        if (groupKey == nil ) {
+              [self SessionKeyGenerate];
+            UIAlertController *loadingWarning = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Hint", @"") message:@"Waiting for the Key response" preferredStyle:UIAlertControllerStyleAlert];
+            [self presentViewController:loadingWarning animated:YES completion:^{
+                dispatch_queue_t queue = dispatch_get_main_queue();
+                dispatch_after(2.0, queue, ^{
+                    [loadingWarning dismissViewControllerAnimated:YES completion:nil];
+                });
+            }];
+            return;
+         }
+    }
+    
+    [self addMessageto:self.contact.contactJid withMessage:Contact andId:messageID messageType:@"Text" mimeType:nil size:nil];
+    if (self.contact.isGroup){
+        NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+        if (groupKey == nil ) {
+              [self SessionKeyGenerate];
+            UIAlertController *loadingWarning = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Hint", @"")
+                                                                                message:@"Waiting for the Key response" preferredStyle:UIAlertControllerStyleAlert];
+            
+            [self presentViewController:loadingWarning animated:YES completion:^{
+                dispatch_queue_t queue = dispatch_get_main_queue();
+                dispatch_after(2.0, queue, ^{
+                    [loadingWarning dismissViewControllerAnimated:YES completion:nil];
+                });
+            }];
+            return;
+         }
+        
+        MLECDHKeyExchange *ecdh = [[MLECDHKeyExchange alloc]init];
+        NSData *groupAAD = [self.contact.contactJid dataUsingEncoding:NSUTF8StringEncoding];
+         NSData *plainData = [Contact dataUsingEncoding:NSUTF8StringEncoding];
+       // NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+        NSData *keyData = [[NSData alloc]
+                           initWithBase64EncodedString:groupKey options:0];
+        if ( keyData == nil) {
+            keyData = [HelperTools dataWithBase64EncodedString:groupKey];
+         }
+          //[HelperTools dataWithBase64EncodedString:groupKey];
+          NSData *ivData = [AESGcm genIV];
+          NSData *encrypted_payload = [ecdh aesMessageEncryptWithMessageData:plainData key:keyData iv:ivData AAD:groupAAD];
+          NSMutableData *encryptedpayload = [NSMutableData dataWithData:ivData];
+          [encryptedpayload appendData:encrypted_payload];
+          NSString *base64cipher = [encryptedpayload base64EncodedStringWithOptions:0];
+       
+        NSLog(@"base64cipher Message %@",base64cipher);
+        [[MLXMPPManager sharedInstance] sendMessage:base64cipher toContact:self.contact isEncrypted:NO isUpload:NO messageId:messageID
+                              withCompletionHandler:nil];
+    }else{
+        [[MLXMPPManager sharedInstance] sendMessage:Contact toContact:self.contact isEncrypted:self.contact.isEncrypted isUpload:NO messageId:messageID
+                            withCompletionHandler:nil];
+    }
+   
+    [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+    }
+
+- (void)contactViewController:(CNContactViewController *)viewController didCompleteWithContact:(CNContact *)contact{
+    [viewController dismissViewControllerAnimated:YES completion:nil];
+}
+- (BOOL)contactViewController:(CNContactViewController *)viewController shouldPerformDefaultActionForContactProperty:(CNContactProperty *)property{
+    return true;
+}
+#pragma mark  - location delegate
+-(void) locationManager:(CLLocationManager*) manager didChangeAuthorizationStatus:(CLAuthorizationStatus)status {
+    CLAuthorizationStatus gpsStatus = [CLLocationManager authorizationStatus];
+    if(gpsStatus == kCLAuthorizationStatusAuthorizedAlways || gpsStatus == kCLAuthorizationStatusAuthorizedWhenInUse) {
+        if(self.sendLocation) {
+            self.sendLocation=NO;
+            [self.locationManager requestLocation];
+        }
+    }
+}
+
+-(void) locationManager:(CLLocationManager*) manager didUpdateLocations:(NSArray<CLLocation*>*) locations
+{
+    [self.locationManager stopUpdatingLocation];
+
+    // Only send geo message if gpsHUD is visible
+    if(self.gpsHUD.hidden == YES) {
+        return;
+    }
+
+    // Check last location
+    CLLocation* gpsLoc = [locations lastObject];
+    if(gpsLoc == nil) {
+        return;
+    }
+    self.gpsHUD.hidden = YES;
+    // Send location
+    [self sendMessage:[NSString stringWithFormat:@"geo:%f,%f", gpsLoc.coordinate.latitude, gpsLoc.coordinate.longitude] withType:kMessageTypeGeo];
+}
+
+- (void) locationManager:(CLLocationManager*) manager didFailWithError:(NSError*) error
+{
+    DDLogError(@"Error while fetching location %@", error);
+}
+
+-(void) makeLocationManager
+{
+    if(self.locationManager == nil)
+    {
+        self.locationManager = [[CLLocationManager alloc] init];
+        self.locationManager.desiredAccuracy = kCLLocationAccuracyBest;
+        self.locationManager.delegate = self;
+    }
+}
+
+-(void) displayGPSHUD
+{
+    // Setup HUD
+    if(!self.gpsHUD) {
+        self.gpsHUD = [MBProgressHUD showHUDAddedTo:self.view animated:YES];
+        self.gpsHUD.removeFromSuperViewOnHide=NO;
+        self.gpsHUD.label.text = NSLocalizedString(@"GPS", @"");
+        self.gpsHUD.detailsLabel.text = NSLocalizedString(@"Waiting for GPS signal", @"");
+    }
+    // Display HUD
+    self.gpsHUD.hidden = NO;
+
+    // Trigger warning when no gps location was received
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if(self.gpsHUD.hidden == NO) {
+            // Stop locationManager & hide gpsHUD screen
+            [self.locationManager stopUpdatingLocation];
+            self.gpsHUD.hidden = YES;
+        
+            // Display warning
+            UIAlertController *gpsWarning = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"No GPS location received", @"")
+                                                                                message:NSLocalizedString(@"Monal did not received a gps location. Please try again later.", @"") preferredStyle:UIAlertControllerStyleAlert];
+            [gpsWarning addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Ok", @"") style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+                [gpsWarning dismissViewControllerAnimated:YES completion:nil];
+            }]];
+            [self presentViewController:gpsWarning animated:YES completion:nil];
+        }
+    });
+}
+
+-(PHPickerViewController*)generatePHPickerViewController API_AVAILABLE(ios(14))
+{
+    PHPickerConfiguration* phConf = [[PHPickerConfiguration alloc] init];
+    phConf.selectionLimit = 0;
+    phConf.filter = [PHPickerFilter anyFilterMatchingSubfilters:@[PHPickerFilter.imagesFilter, PHPickerFilter.videosFilter]];
+    PHPickerViewController* picker = [[PHPickerViewController alloc] initWithConfiguration:phConf];
+    picker.delegate = self;
+    return picker;
+}
+
+#pragma mark - attachment picker
+
+-(void) showCameraPermissionWarning
+{
+    UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Camera permissions missing", @"Camera permissions missing warning") message:NSLocalizedString(@"Monal is not allowed to access the camera", @"Camera permissions missing warning") preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction* defaultAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"OK", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction* action) {}];
+
+    UIAlertAction* monalIosSettings = [UIAlertAction actionWithTitle:NSLocalizedString(@"Settings", @"Camera permissions missing warning") style:UIAlertActionStyleDefault handler:^(UIAlertAction* _Nonnull action) {
+        [[UIApplication sharedApplication] openURL:[NSURL URLWithString:UIApplicationOpenSettingsURLString] options:@{} completionHandler:nil];
+    }];
+
+    [alert addAction:defaultAction];
+    [alert addAction:monalIosSettings];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+-(IBAction)attach:(id)sender
+{
+    [self stopEditing];
+    [self.chatInput resignFirstResponder];
+
+    UIAlertController* actionControll = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Select Action", @"")
+                                                                            message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+
+    // Check for http upload support
+//    if(!self.xmppAccount.connectionProperties.supportsHTTPUpload)
+//    {
+//        UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Error", @"")
+//                                                                       message:NSLocalizedString(@"This server does not appear to support HTTP file uploads (XEP-0363). Please ask the administrator to enable it.", @"") preferredStyle:UIAlertControllerStyleAlert];
+//        [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Close", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+//            [alert dismissViewControllerAnimated:YES completion:nil];
+//        }]];
+//        [self presentViewController:alert animated:YES completion:nil];
+        
+     //   return;
+//    } else {
+//#if TARGET_OS_MACCATALYST
+//        UIAlertAction* fileAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Files", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+//            [self attachfile:sender];
+//        }];
+//
+//        [fileAction setValue:[[UIImage imageNamed:@"file-attatchment"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forKey:@"image"];
+//        [actionControll addAction:fileAction];
+//#else
+        UIImagePickerController* mediaPicker = [[UIImagePickerController alloc] init];
+        mediaPicker.delegate = self;
+
+        UIAlertAction* cameraAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Camera", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction* _Nonnull action) {
+            mediaPicker.sourceType = UIImagePickerControllerSourceTypeCamera;
+            mediaPicker.mediaTypes = @[(NSString*)kUTTypeImage, (NSString*)kUTTypeMovie];
+
+            switch ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo])
+            {
+                case AVAuthorizationStatusAuthorized:
+                {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self presentViewController:mediaPicker animated:YES completion:nil];
+                    });
+                    break;
+                }
+                case AVAuthorizationStatusNotDetermined:
+                {
+                    [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo completionHandler:^(BOOL granted)
+                    {
+                        if(granted == YES)
+                        {
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                [self presentViewController:mediaPicker animated:YES completion:nil];
+                            });
+                        }
+                        else
+                            DDLogWarn(@"Camera access not granted. AV Permissions now set to denied");
+                    }];
+                    break;
+                }
+                case AVAuthorizationStatusDenied:
+                case AVAuthorizationStatusRestricted:
+                {
+                    DDLogWarn(@"Camera access denied");
+                    [self showCameraPermissionWarning];
+                    break;
+                }
+            }
+        }];
+
+        UIAlertAction* photosAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Photos", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            if(@available(iOS 14, *)) {
+                [self presentViewController:[self generatePHPickerViewController] animated:YES completion:nil];
+            } else {
+                mediaPicker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+                mediaPicker.allowsEditing = NO;
+                [self presentViewController:mediaPicker animated:YES completion:nil];
+            }
+        }];
+        UIAlertAction* sendContactAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"Send Contact", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            [self SendContactButtonpressed];
+        }];
+        if (@available(iOS 13.0, *)) {
+            [sendContactAction setValue:[[UIImage imageNamed:@"contact"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forKey:@"image"];
+        }
+        UIAlertAction* fileAction = [UIAlertAction actionWithTitle:NSLocalizedString(@"File", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            [self presentViewController:self.filePicker animated:YES completion:nil];
+        }];
+
+        // Set image
+        if (@available(iOS 13.0, *)) {
+            [cameraAction setValue:[[UIImage systemImageNamed:@"camera"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forKey:@"image"];
+            [photosAction setValue:[[UIImage systemImageNamed:@"photo"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forKey:@"image"];
+        } else {
+            [cameraAction setValue:[[UIImage imageNamed:@"714-camera"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forKey:@"image"];
+        }
+        [fileAction setValue:[[UIImage imageNamed:@"file-attatchment"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forKey:@"image"];
+        [actionControll addAction:cameraAction];
+        [actionControll addAction:photosAction];
+        [actionControll addAction:fileAction];
+        [actionControll addAction:sendContactAction];
+//#endif
+//    }
+    
+    UIAlertAction* gpsAlert = [UIAlertAction actionWithTitle:NSLocalizedString(@"Send Location",@ "") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        // GPS
+        CLAuthorizationStatus gpsStatus = [CLLocationManager authorizationStatus];
+        if(gpsStatus == kCLAuthorizationStatusAuthorizedAlways || gpsStatus == kCLAuthorizationStatusAuthorizedWhenInUse) {
+            [self displayGPSHUD];
+            [self makeLocationManager];
+            [self.locationManager startUpdatingLocation];
+        } else if(gpsStatus == kCLAuthorizationStatusNotDetermined) {
+#if TARGET_OS_MACCATALYST
+            UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Location Access Needed", @"") message:NSLocalizedString(@"Monal  uses your location when you send a location message in a conversation.", @"") preferredStyle:UIAlertControllerStyleAlert];
+            
+            [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Close", @ "") style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+                [alert dismissViewControllerAnimated:YES completion:nil];
+            }]];
+            
+            UIAlertAction* allow = [UIAlertAction actionWithTitle:NSLocalizedString(@"Allow", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                [self makeLocationManager];
+                self.sendLocation=YES;
+                [self.locationManager requestWhenInUseAuthorization];
+            }];
+            [alert addAction:allow];
+            
+            [self presentViewController:alert animated:YES completion:nil];
+
+#else
+            [self makeLocationManager];
+            self.sendLocation=YES;
+            [self.locationManager requestWhenInUseAuthorization];
+#endif
+
+        } else {
+            UIAlertController *permissionAlert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Location Access Needed",@ "")
+                                                                                     message:NSLocalizedString(@"Monal does not have access to your location. Please update the location access in your device's Privacy Settings.",@ "") preferredStyle:UIAlertControllerStyleAlert];
+            [self presentViewController:permissionAlert animated:YES completion:nil];
+            [permissionAlert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel",@ "") style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+                [permissionAlert dismissViewControllerAnimated:YES completion:nil];
+            }]];
+        }
+    }];
+
+    // Set image
+    if (@available(iOS 13.0, *)) {
+        [gpsAlert setValue:[[UIImage systemImageNamed:@"location"] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal] forKey:@"image"];
+    }
+    [actionControll addAction:gpsAlert];
+    [actionControll addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"") style:UIAlertActionStyleCancel handler:^(UIAlertAction * _Nonnull action) {
+        [actionControll dismissViewControllerAnimated:YES completion:nil];
+    }]];
+
+    actionControll.popoverPresentationController.sourceView=sender;
+    [self presentViewController:actionControll animated:YES completion:nil];
+}
+
+-(void)SendContactButtonpressed{
+    CNContactPickerViewController *contactPicker = [CNContactPickerViewController new];
+    contactPicker.delegate = self;
+    [self presentViewController:contactPicker animated:YES completion:nil];
+}
+
+- (void) picker:(PHPickerViewController*) picker didFinishPicking:(NSArray<PHPickerResult*>*) results API_AVAILABLE(ios(14)) {
+    [self dismissViewControllerAnimated:YES completion:nil];
+    for(PHPickerResult* userSelection in results) {
+        NSItemProvider* provider = userSelection.itemProvider;
+        NSAssert(provider != nil, @"Expected a NSItemProvider");
+        if([provider hasItemConformingToTypeIdentifier:@"com.apple.quicktime-movie"] == YES)
+        {
+            [provider loadItemForTypeIdentifier:@"com.apple.quicktime-movie" options:nil completionHandler:^(NSURL* path, NSError* error)
+             {
+                if(error != nil)
+                    DDLogInfo(@"Error while parsing video provider: %@", error);
+                if(path == nil)
+                    DDLogInfo(@"Video provider passed empty path");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self addImagesToQueue:@[path]];
+                });
+            }];
+        }
+        else if([provider hasItemConformingToTypeIdentifier:@"public.mpeg-4"] == YES)
+        {
+            [provider loadItemForTypeIdentifier:@"public.mpeg-4" options:nil completionHandler:^(NSURL* path, NSError* error)
+             {
+                if(error != nil)
+                    DDLogInfo(@"Error while parsing video provider: %@", error);
+                if(path == nil)
+                    DDLogInfo(@"Video provider passed empty path");
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self addImagesToQueue:@[path]];
+                });
+            }];
+        }
+        else
+        {
+            [provider loadObjectOfClass:[UIImage class] completionHandler:^(__kindof id<NSItemProviderReading>  _Nullable object, NSError * _Nullable error) {
+    #ifdef TARGET_OS_SIMULATOR
+                if(NSStringFromClass([object class]) == nil) {
+                    DDLogError(@"Could not add user-selected image to the upload queue! This is a known issue for iOS Simulator when trying to load HDR images, see https://developer.apple.com/forums/thread/665265");
+                    return;
+                }
+    #endif
+                assert([object isKindOfClass: [UIImage class]]);
+                UIImage* image = (UIImage*)object;
+
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self addRawImagesToQueue:@[image]];
+                });
+            }];
+        }
+    }
+}
+
+-(void) imagePickerController:(UIImagePickerController*) picker didFinishPickingMediaWithInfo:(NSDictionary<NSString*, id>*) info
+{
+    [self dismissViewControllerAnimated:YES completion:nil];
+
+    if(info[UIImagePickerControllerMediaType] == nil)
+        return;
+    else if([info[UIImagePickerControllerMediaType] isEqualToString:(NSString*)kUTTypeImage])
+    {
+        UIImage* selectedImage = info[UIImagePickerControllerEditedImage];
+        if(!selectedImage)
+            selectedImage = info[UIImagePickerControllerOriginalImage];
+        [self addRawImagesToQueue:@[selectedImage]];
+    }
+    else if([info[UIImagePickerControllerMediaType] isEqualToString:(NSString*)kUTTypeMovie])
+    {
+        NSAssert(info[UIImagePickerControllerMediaURL] != nil, @"Expected video url");
+        [self addImagesToQueue:@[info[UIImagePickerControllerMediaURL]]];
+    }
+    else
+    {
+        DDLogWarn(@"Created MediaType: %@ without handler", info[UIImagePickerControllerMediaType]);
+        unreachable();
+    }
+}
+
+- (void)imagePickerControllerDidCancel:(UIImagePickerController *)picker
+{
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark - handling notfications
+
+-(void) reloadTable
+{
+    if(self.messageTable.hasUncommittedUpdates)
+        return;
+    [self.messageTable reloadData];
+}
+
+//only for messages going out
+-(NSNumber*) addMessageto:(NSString *)to withMessage:(nonnull NSString *) message andId:(nonnull NSString *) messageId messageType:(nonnull NSString *) messageType mimeType:(NSString *) mimeType size:(NSNumber *) size
+{
+    
+    if(!self.jid || !message)
+    {
+        DDLogError(@"not ready to send messages");
+        return nil;
+    }
+    
+    NSNumber* messageDBId = [[DataLayer sharedInstance] addMessageHistoryTo:to forAccount:self.contact.accountId withMessage:message actuallyFrom:(self.contact.isGroup ? self.contact.accountNickInGroup : self.jid) withId:messageId encrypted:self.contact.isEncrypted messageType:messageType mimeType:mimeType size:size];
+    
+    if(messageDBId)
+    {
+        DDLogVerbose(@"added message");
+        NSArray* msgList = [[DataLayer sharedInstance] messagesForHistoryIDs:@[messageDBId]];
+        if(![msgList count])
+        {
+            DDLogError(@"Could not find msg for history ID %@!", messageDBId);
+            return nil;
+        }
+        MLMessage* messageObj = msgList[0];
+        
+        [self tempfreezeAutoloading];
+        
+        //update message list in ui
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.messageTable performBatchUpdates:^{
+                if(!self.messageList)
+                    self.messageList = [[NSMutableArray alloc] init];
+                [self.messageList addObject:messageObj];
+                NSInteger bottom = [self.messageList count]-1;
+                if(bottom>=0)
+                {
+                    NSIndexPath* path1 = [NSIndexPath indexPathForRow:bottom inSection:messagesSection];
+                    [self->_messageTable insertRowsAtIndexPaths:@[path1]
+                                                withRowAnimation:UITableViewRowAnimationNone];
+                }
+            } completion:^(BOOL finished) {
+                [self scrollToBottom];
+            }];
+        });
+        
+        // make sure its in active chats list
+        if(_firstmsg == YES)
+        {
+            [[DataLayer sharedInstance] addActiveBuddies:to forAccount:self.contact.accountId];
+            _firstmsg = NO;
+        }
+    }
+    else
+        DDLogError(@"failed to add message to history db");
+    return messageDBId;
+}
+
+-(void) handleNewMessage:(NSNotification *)notification
+{
+    DDLogVerbose(@"chat view got new message notice %@", notification.userInfo);
+    
+    MLMessage* message = [notification.userInfo objectForKey:@"message"];
+    if(!message)
+        DDLogError(@"Notification without message");
+    
+    if([message isEqualToContact:self.contact])
+    {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if(!self.messageList)
+                self.messageList = [[NSMutableArray alloc] init];
+            
+            //update already existent message
+            for(size_t msgIdx = [self.messageList count]; msgIdx > 0; msgIdx--)
+            {
+                // find msg that should be updated
+                MLMessage* msgInList = [self.messageList objectAtIndex:(msgIdx - 1)];
+                if([msgInList.messageDBId intValue] == [message.messageDBId intValue])
+                {
+                    //update message in our list
+                    [msgInList updateWithMessage:message];
+                    
+                    // Update table entry
+                    NSIndexPath* indexPath = [NSIndexPath indexPathForRow:(msgIdx - 1) inSection:messagesSection];
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self->_messageTable beginUpdates];
+                        [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+                        [self->_messageTable endUpdates];
+                    });
+                    return;
+                }
+            }
+            [CATransaction begin];
+            [self.messageList addObject:message];   //do not insert based on delay timestamp because that would make it possible to fake history entries
+
+            [self->_messageTable beginUpdates];
+            NSIndexPath *path1;
+            NSInteger bottom =  self.messageList.count-1;
+            if(bottom >= 0) {
+                path1 = [NSIndexPath indexPathForRow:bottom  inSection:messagesSection];
+                [self->_messageTable insertRowsAtIndexPaths:@[path1]
+                                           withRowAnimation:UITableViewRowAnimationBottom];
+            }
+            [self->_messageTable endUpdates];
+
+            [self scrollToBottom];
+            [CATransaction commit];
+            
+            if (self.searchController.isActive)
+            {
+                [self doSetMsgPathIdx:bottom withDBId:message.messageDBId];
+                [self.searchController getSearchData:self.self.searchController.searchBar.text];
+                [self.searchController setResultToolBar];
+            }
+            
+            [self refreshCounter];
+        });
+    }
+}
+
+-(void) handleDeletedMessage:(NSNotification*) notification
+{
+    NSDictionary* dic = notification.userInfo;
+    MLMessage* msg = dic[@"message"];
+    
+    DDLogDebug(@"Got deleted message notice for history id %ld and message id %@", (long)[msg.messageDBId intValue], msg.messageId);
+    
+    NSIndexPath* indexPath;
+    for(size_t msgIdx = [self.messageList count]; msgIdx > 0; msgIdx--)
+    {
+        // find msg that should be deleted
+        MLMessage* msgInList = [self.messageList objectAtIndex:(msgIdx - 1)];
+        if([msgInList.messageDBId intValue] == [msg.messageDBId intValue])
+        {
+            // Remove table entry
+            indexPath = [NSIndexPath indexPathForRow:(msgIdx - 1) inSection:messagesSection];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self->_messageTable beginUpdates];
+                [self.messageList removeObjectAtIndex:indexPath.row];
+                [self->_messageTable deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationRight];
+                [self->_messageTable endUpdates];
+            });
+            break;
+        }
+    }
+}
+
+-(void) updateMsgState:(NSString *) messageId withEvent:(size_t) event withOptDic:(NSDictionary*) dic
+{
+    NSIndexPath* indexPath;
+    for(size_t msgIdx = [self.messageList count]; msgIdx > 0; msgIdx--)
+    {
+        // find msg that should be updated
+        MLMessage* msg = [self.messageList objectAtIndex:(msgIdx - 1)];
+        if([msg.messageId isEqualToString:messageId])
+        {
+            // Set correct flags
+            if(event == msgSent) {
+                DDLogVerbose(@"got msgSent event for messageid: %@", messageId);
+                msg.hasBeenSent = YES;
+            } else if(event == msgRecevied) {
+                DDLogVerbose(@"got msgRecevied event for messageid: %@", messageId);
+                msg.hasBeenSent = YES;
+                msg.hasBeenReceived = YES;
+            } else if(event == msgDisplayed) {
+                DDLogVerbose(@"got msgDisplayed event for messageid: %@", messageId);
+                msg.hasBeenSent = YES;
+                msg.hasBeenReceived = YES;
+                msg.hasBeenDisplayed = YES;
+            } else if(event == msgErrorAfterSent) {
+                DDLogVerbose(@"got msgErrorAfterSent event for messageid: %@", messageId);
+                //we don't want to show errors if the message has been received at least once
+                if(!msg.hasBeenReceived)
+                {
+                    msg.errorType = [dic objectForKey:@"errorType"];
+                    msg.errorReason = [dic objectForKey:@"errorReason"];
+                }
+            }
+            
+            indexPath = [NSIndexPath indexPathForRow:(msgIdx - 1) inSection:messagesSection];
+
+            // Update table entry
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self->_messageTable beginUpdates];
+                [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+                [self->_messageTable endUpdates];
+            });
+
+            break;
+        }
+    }
+}
+
+
+-(void) handleSentMessage:(NSNotification*) notification
+{
+    NSDictionary* dic = notification.userInfo;
+    [self updateMsgState:[dic objectForKey:kMessageId] withEvent:msgSent withOptDic:nil];
+}
+
+-(void) handleMessageError:(NSNotification*) notification
+{
+    NSDictionary* dic = notification.userInfo;
+    [self updateMsgState:[dic objectForKey:kMessageId] withEvent:msgErrorAfterSent withOptDic:dic];
+}
+
+-(void) handleReceivedMessage:(NSNotification*) notification
+{
+    NSDictionary *dic = notification.userInfo;
+    [self updateMsgState:[dic objectForKey:kMessageId] withEvent:msgRecevied withOptDic:nil];
+}
+
+-(void) handleDisplayedMessage:(NSNotification*) notification
+{
+    NSDictionary *dic = notification.userInfo;
+    [self updateMsgState:[dic objectForKey:kMessageId] withEvent:msgDisplayed withOptDic:nil];
+}
+
+-(void) handleFiletransferMessageUpdate:(NSNotification*) notification
+{
+    NSDictionary* dic = notification.userInfo;
+    MLMessage* msg = dic[@"message"];
+    
+    DDLogDebug(@"Got filetransfer message update for history id %ld: %@ (%@)", (long)[msg.messageDBId intValue], msg.filetransferMimeType, msg.filetransferSize);
+    
+    NSIndexPath* indexPath;
+    for(size_t msgIdx = [self.messageList count]; msgIdx > 0; msgIdx--)
+    {
+        // find msg that should be updated
+        MLMessage* msgInList = [self.messageList objectAtIndex:(msgIdx - 1)];
+        if([msgInList.messageDBId intValue] == [msg.messageDBId intValue])
+        {
+            //update message in our list (this will copy filetransferMimeType and filetransferSize fields)
+            [msgInList updateWithMessage:msg];
+            
+            //TODO JIM: do something on update (maybe this is not needed because handling will be done in filetransferChatCell)
+            
+            // Update table entry
+            indexPath = [NSIndexPath indexPathForRow:(msgIdx - 1) inSection:messagesSection];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self->_messageTable beginUpdates];
+                [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+                [self->_messageTable endUpdates];
+            });
+            break;
+        }
+    }
+}
+
+-(void) scrollToBottom
+{
+    if(self.messageList.count == 0) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSInteger bottom = [self.messageTable numberOfRowsInSection:messagesSection];
+        if(bottom > 0)
+        {
+            NSIndexPath* path1 = [NSIndexPath indexPathForRow:bottom-1  inSection:messagesSection];
+          //  if(![self.messageTable.indexPathsForVisibleRows containsObject:path1])
+            {
+                [self.messageTable scrollToRowAtIndexPath:path1 atScrollPosition:UITableViewScrollPositionBottom animated:YES];
+            }
+        }
+    });
+}
+
+#pragma mark - date time
+
+-(void) setupDateObjects
+{
+    self.destinationDateFormat = [[NSDateFormatter alloc] init];
+    [self.destinationDateFormat setLocale:[NSLocale currentLocale]];
+    [self.destinationDateFormat setDoesRelativeDateFormatting:YES];
+
+    self.gregorian = [[NSCalendar alloc]
+                      initWithCalendarIdentifier:NSCalendarIdentifierGregorian];
+    
+    NSDate* now =[NSDate date];
+    self.thisday = [self.gregorian components:NSCalendarUnitDay fromDate:now].day;
+    self.thismonth = [self.gregorian components:NSCalendarUnitMonth fromDate:now].month;
+    self.thisyear = [self.gregorian components:NSCalendarUnitYear fromDate:now].year;
+}
+
+
+-(NSString*) formattedDateWithSource:(NSDate *) sourceDate  andPriorDate:(NSDate *) priorDate indexPath:(NSIndexPath *) indexPath{
+    NSString* dateString;
+    if(sourceDate!=nil)
+    {
+        NSInteger msgday =[self.gregorian components:NSCalendarUnitDay fromDate:sourceDate].day;
+        NSInteger msgmonth=[self.gregorian components:NSCalendarUnitMonth fromDate:sourceDate].month;
+        NSInteger msgyear =[self.gregorian components:NSCalendarUnitYear fromDate:sourceDate].year;
+
+        NSInteger priorDay = 0;
+        NSInteger priorMonth = 0;
+        NSInteger priorYear = 0;
+
+        if(priorDate) {
+            priorDay = [self.gregorian components:NSCalendarUnitDay fromDate:priorDate].day;
+            priorMonth = [self.gregorian components:NSCalendarUnitMonth fromDate:priorDate].month;
+            priorYear = [self.gregorian components:NSCalendarUnitYear fromDate:priorDate].year;
+        }
+
+        if (priorDate && ((priorDay != msgday) || (priorMonth != msgmonth) || (priorYear != msgyear))  )
+        {
+            //divider, hide time
+            [self.destinationDateFormat setTimeStyle:NSDateFormatterNoStyle];
+            // note: if it isnt the same day we want to show the full  day
+            [self.destinationDateFormat setDateStyle:NSDateFormatterMediumStyle];
+            dateString = [self.destinationDateFormat stringFromDate:sourceDate];
+        }else if (indexPath.row == 0){
+            
+            [self.destinationDateFormat setTimeStyle:NSDateFormatterNoStyle];
+            // note: if it isnt the same day we want to show the full  day
+            [self.destinationDateFormat setDateStyle:NSDateFormatterMediumStyle];
+            dateString = [self.destinationDateFormat stringFromDate:sourceDate];
+        }
+    }
+    return dateString;
+}
+
+-(NSString*) formattedTimeStampWithSource:(NSDate *) sourceDate
+{
+    NSString* dateString;
+    if(sourceDate != nil)
+    {
+        [self.destinationDateFormat setDateStyle:NSDateFormatterNoStyle];
+        [self.destinationDateFormat setTimeStyle:NSDateFormatterShortStyle];
+        
+        dateString = [self.destinationDateFormat stringFromDate:sourceDate];
+    }
+    return dateString;
+}
+
+
+
+-(void) retry:(id) sender
+{
+    NSInteger msgHistoryID = ((UIButton*) sender).tag;
+    NSArray* msgArray = [[DataLayer sharedInstance] messagesForHistoryIDs:@[[NSNumber numberWithInteger:msgHistoryID]]];
+    if(![msgArray count])
+    {
+        DDLogError(@"Called retry for non existing message with history id %ld", (long)msgHistoryID);
+        return;
+    }
+    MLMessage* msg = msgArray[0];
+    DDLogDebug(@"Called retry for message with history id %ld: %@", (long)msgHistoryID, msg);
+
+    UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Retry sending message?", @"") message:[NSString stringWithFormat:NSLocalizedString(@"This message failed to send (%@): %@", @""), msg.errorType, msg.errorReason] preferredStyle:UIAlertControllerStyleActionSheet];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Retry", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        [self sendMessage:msg.messageText andMessageID:msg.messageId withType:nil];     //type not needed for messages already in history db
+        //[self setMessageId:msg.messageId sent:YES]; // for the UI, db will be set in the notification
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Cancel", @"") style:UIAlertActionStyleCancel handler:^(UIAlertAction *action) {
+        [self dismissViewControllerAnimated:YES completion:nil];
+    }]];
+    alert.popoverPresentationController.sourceView = sender;
+    
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+#pragma mark - tableview datasource
+
+-(NSInteger) numberOfSectionsInTableView:(UITableView *)tableView
+{
+    return chatViewControllerSectionCnt;
+}
+
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section
+{
+    switch (section) {
+        case reloadBoxSection:
+            return 1;
+            break;
+        case messagesSection:
+        {
+            
+            return [self.messageList count];
+            break;
+        }
+        default:
+            break;
+    }
+    return 0;
+}
+
+-(nullable __kindof UITableViewCell*) messageTableCellWithIdentifier:(NSString*) identifier andInbound:(BOOL) inboundDirection fromTable:(UITableView*) tableView
+{
+    NSString* direction = @"In";
+    if(!inboundDirection)
+    {
+        direction = @"Out";
+    }
+    NSString* fullIdentifier = [NSString stringWithFormat:@"%@%@Cell", identifier, direction];
+    return [tableView dequeueReusableCellWithIdentifier:fullIdentifier];
+}
+
+-(void) tableView:(UITableView*) tableView willDisplayCell:(nonnull UITableViewCell *)cell forRowAtIndexPath:(nonnull NSIndexPath *)indexPath
+{
+    if(indexPath.section == messagesSection && indexPath.row == 0) {
+        if(self.moreMessagesAvailable && !self.viewIsScrolling) {
+            [self loadOldMsgHistory];
+            // Allow loading of more messages after a few seconds
+            monal_void_block_t __block allowAutoLoading = ^{
+                self.viewIsScrolling = NO;
+            };
+            createTimer(10, allowAutoLoading);
+        }
+    }
+}
+-(NSString *) decryptGroupMessage:(NSString *)Payload {
+    MLECDHKeyExchange *ecdh = [[MLECDHKeyExchange alloc] init];
+    NSData *payload = [[NSData alloc]
+                       initWithBase64EncodedString:Payload options:0];
+    if (payload == nil){
+        payload = [HelperTools dataWithBase64EncodedString:Payload];
+        if (payload == nil){
+            return @"error_Decrypt";
+        }
+    }
+    NSData *fromData = [self.contact.contactJid dataUsingEncoding:NSUTF8StringEncoding];
+    //[HelperTools dataWithBase64EncodedString:encrtyptedPayload];
+//    NSUInteger length = fromData.length + 12;
+//    if (payload.length >  length){
+    @try {
+        NSData *iv = [payload subdataWithRange:NSMakeRange(0, 12)];
+       
+        NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+        if (groupKey != nil){
+            NSData *keyData = [[NSData alloc]
+                               initWithBase64EncodedString:groupKey options:0];
+            if ( keyData == nil) {
+                keyData = [HelperTools dataWithBase64EncodedString:groupKey];
+             }
+            NSData *bodyPayload = [payload subdataWithRange:NSMakeRange(12, payload.length - 12)];
+
+           
+            NSString *decryptedbody = [ecdh aesMessageDecryptWithEncrypteddata:bodyPayload iv:iv key:keyData AAD:fromData];
+            //[ecdh decryptmessageWithEncrypteddata:bodyPayload iv:iv key:keyData AAD:fromData];
+           
+            if ([decryptedbody isEqualToString:@"error_Decrypt"] ){
+                return @"error_Decrypt";
+            }
+            else{
+                return decryptedbody;
+            }
+        }
+    }
+    @catch (NSException *exception) {
+//        dispatch_async(dispatch_get_main_queue(), ^{
+//            UIAlertController * alert = [UIAlertController
+//                                        alertControllerWithTitle:@"Error"
+//                                        message:exception.reason
+//                                        preferredStyle:UIAlertControllerStyleActionSheet];
+//
+//           //Add Buttons
+//
+//           UIAlertAction* ok = [UIAlertAction
+//                                       actionWithTitle:@"ok"
+//                                       style:UIAlertActionStyleDefault
+//                                       handler:^(UIAlertAction * action) {
+//
+//                                       }];
+//            [alert addAction:ok];
+//            [self presentViewController:alert animated:YES completion:nil];
+//        });
+       NSLog(@"%@", exception.reason);
+
+    }
+    @finally {
+       NSLog(@"Finally condition");
+       // return Payload;
+    }
+      
+    //}
+   
+    return Payload;
+}
+
+
+-(UITableViewCell*) tableView:(UITableView*) tableView cellForRowAtIndexPath:(NSIndexPath*) indexPath
+{
+    if(indexPath.section == reloadBoxSection)
+    {
+        MLReloadCell* cell = (MLReloadCell*)[tableView dequeueReusableCellWithIdentifier:@"reloadBox" forIndexPath:indexPath];
+#if TARGET_OS_MACCATALYST
+            // "Pull" could be a bit misleading on a mac
+            cell.reloadLabel.text = NSLocalizedString(@"Scroll down to load more messages", @"mac only string");
+#endif
+
+        // Remove selection style (if cell is pressed)
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        return cell;
+    }
+
+    MLBaseCell* cell;
+    
+    MLMessage* row;
+    if(indexPath.row < self.messageList.count) {
+        row = [self.messageList objectAtIndex:indexPath.row];
+    } else {
+        DDLogError(@"Attempt to access beyond bounds");
+    }
+    
+    cell.msg = row;
+
+    //cut text after kMonalChatMaxAllowedTextLen chars to make the message cell work properly (too big texts don't render the text in the cell at all)
+    NSString* messageText = row.messageText;
+    if([messageText length] > kMonalChatMaxAllowedTextLen)
+        messageText = [NSString stringWithFormat:@"%@\n[...]", [messageText substringToIndex:kMonalChatMaxAllowedTextLen]];
+    BOOL inboundDir = row.inbound;
+
+    if([row.messageType isEqualToString:kMessageTypeStatus])
+    {
+        cell = [tableView dequeueReusableCellWithIdentifier:@"StatusCell"];
+        cell.messageBody.text = messageText;
+        cell.link = nil;
+        cell.parent = self;
+        return cell;
+    }
+    else if([row.messageType isEqualToString:kMessageTypeFiletransfer])
+    {
+        DDLogVerbose(@"got filetransfer chat cell: %@ (%@)", row.filetransferMimeType, row.filetransferSize);
+        NSDictionary* info = [MLFiletransfer getFileInfoForMessage:row];
+        
+        //TODO JIM: here we need the download and check-file buttons
+        
+        if(info && ![info[@"needsDownloading"] boolValue])
+        {
+            cell = [self fileTransferCellCheckerWithInfo:info direction:inboundDir tableView:tableView andMsg:row];
+        }
+        else if (info && [info[@"needsDownloading"] boolValue])
+        {
+            //TODO JIM: explanation: this was already checked (mime ype and size are known) but not yet downloaded --> download it
+            //TODO JIM: explanation: this should not be automatically but only triggered by a button press
+            //TODO JIM: explanation: I'm doing this automatically here because we still lack those buttons
+            //TODO JIM: explanation: this only handles images, because we don't want to autodownload everything
+            MLFileTransferDataCell* fileTransferCell = (MLFileTransferDataCell *) [self messageTableCellWithIdentifier:@"fileTransferCheckingData" andInbound:inboundDir fromTable:tableView];
+            NSString* fileSize = info[@"size"] ? info[@"size"] : @"0";
+            [fileTransferCell initCellForMessageId:row.messageDBId andFilename:info[@"filename"] andMimeType:info[@"mimeType"] andFileSize:fileSize.longLongValue];
+
+            cell = fileTransferCell;
+        }
+    }
+    
+    else if([row.messageType isEqualToString:kMessageTypeUrl] && [[HelperTools defaultsDB] boolForKey:@"ShowURLPreview"])
+    {
+        MLLinkCell* toreturn = (MLLinkCell *)[self messageTableCellWithIdentifier:@"link" andInbound:inboundDir fromTable: tableView];
+        
+        NSString* cleanLink = [messageText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        NSArray* parts = [cleanLink componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        toreturn.link = parts[0];
+        row.url= [NSURL URLWithString:toreturn.link];
+        toreturn.messageBody.text = toreturn.link;
+        toreturn.messageHistoryId = row.messageDBId;
+        
+        if(row.previewText || row.previewImage)
+        {
+            toreturn.imageUrl = row.previewImage;
+            toreturn.messageTitle.text = row.previewText;
+            
+            [toreturn loadImageWithCompletion:^{}];
+            
+        }
+        else
+        {
+            [self loadPreviewWithUrlForRow:indexPath withCompletion:^{
+                
+            }];
+        }
+       
+        cell = toreturn;
+    } else if ([row.messageType isEqualToString:kMessageTypeImageCaption]){
+        MLImageMsgCell *toreturn = (MLImageMsgCell *)[self messageTableCellWithIdentifier:@"ImageMsg" andInbound:inboundDir fromTable: tableView];
+        toreturn.message = row;
+        if (self.contact.isGroup){
+            toreturn.Name.text = row.participantJid;
+        }
+        [toreturn loadMessagePreviewWithCompletion:^{
+        }];
+        
+        cell = toreturn;
+    }else if([row.messageType isEqualToString:KMessageTypeReply]){
+        MLReplyViewCell *toreturn = (MLReplyViewCell *)[self messageTableCellWithIdentifier:@"Reply" andInbound:inboundDir fromTable: tableView];
+        toreturn.message = row;
+        toreturn.Jid = self.jid;
+        toreturn.searchMessageList = [self.messageList copy];
+        toreturn.previewContact = self.contact;
+        [toreturn loadMessagePreviewWithCompletion:^{
+        }];
+        cell = toreturn;
+    }else if ([row.messageType isEqualToString:KMessageDecrypt]){
+        MLDecryptPopupCell *toreturn = (MLDecryptPopupCell *)[self messageTableCellWithIdentifier:@"DecryptPopup" andInbound:inboundDir fromTable: tableView];
+        NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+        if (groupKey != nil) {
+            NSString *messageType;
+            NSString *body = [self decryptGroupMessage:row.messageText ];
+            if ([body isEqualToString:@"error_Decrypt"] ){
+                messageType = KMessageDecrypt;
+                body = row.messageText;
+                [[DataLayer sharedInstance] setMessageHistoryId:row.messageDBId messageType:messageType];
+                [[DataLayer sharedInstance] updateMessageHistory:row.messageDBId withText:body];
+            }else{
+                if([body hasPrefix:@"geo:"]){
+                    messageType  = kMessageTypeGeo;
+                }
+                //encrypted messages having one single string prefixed with "aesgcm:" are filetransfers, too (tribal knowledge)
+                else if([body containsString:kMessageTypeImageCaption]){
+                    messageType  = kMessageTypeImageCaption;
+                }
+                else if( [body hasPrefix:@"aesgcm://"]){
+                    body = [body componentsSeparatedByString:@"|"][0];
+                    messageType  = kMessageTypeFiletransfer;
+                }
+                else if([body hasPrefix:@"https://"]){
+                    messageType  = kMessageTypeUrl;
+                }
+                else if ([body hasPrefix:KMessageTypeReply]){
+                    messageType  = KMessageTypeReply;
+                }else{
+                    messageType = kMessageTypeText;
+                }
+                
+                [[DataLayer sharedInstance] setMessageHistoryId:row.messageDBId messageType:messageType];
+                [[DataLayer sharedInstance] updateMessageHistory:row.messageDBId withText:body];
+               
+            }
+            
+        
+            //[self.messageTable reloadData];
+            [self->_messageTable beginUpdates];
+            [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+            [self->_messageTable endUpdates];
+            //update active chats if necessary
+            [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+        }
+        
+       
+       
+        cell = toreturn;
+    }
+    else if ([row.messageType isEqualToString:kMessageTypeGeo]) {
+        // Parse latitude and longitude
+
+        NSError* error = NULL;
+        NSRegularExpression* geoRegex = [NSRegularExpression regularExpressionWithPattern:geoPattern
+        options:NSRegularExpressionCaseInsensitive
+          error:&error];
+
+        if(error != NULL) {
+            DDLogError(@"Error while loading geoPattern");
+        }
+
+        NSTextCheckingResult* geoMatch = [geoRegex firstMatchInString:messageText options:0 range:NSMakeRange(0, [messageText length])];
+        
+        if(geoMatch.numberOfRanges > 0) {
+            NSRange latitudeRange = [geoMatch rangeAtIndex:1];
+            NSRange longitudeRange = [geoMatch rangeAtIndex:2];
+            NSString* latitude = [messageText substringWithRange:latitudeRange];
+            NSString* longitude = [messageText substringWithRange:longitudeRange];
+
+            // Display inline map
+            if(self.showGeoLocationsInline) {
+                MLChatMapsCell* mapsCell = (MLChatMapsCell *)[self messageTableCellWithIdentifier:@"maps" andInbound:inboundDir fromTable: tableView];
+
+                // Set lat / long used for map view and pin
+                mapsCell.latitude = [latitude doubleValue];
+                mapsCell.longitude = [longitude doubleValue];
+
+                [mapsCell loadCoordinatesWithCompletion:^{}];
+                cell = mapsCell;
+            } else {
+                // Default to text cell
+                cell = [self messageTableCellWithIdentifier:@"text" andInbound:inboundDir fromTable: tableView];
+                NSMutableAttributedString* geoString = [[NSMutableAttributedString alloc] initWithString:messageText];
+                [geoString addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:[geoMatch rangeAtIndex:0]];
+
+                cell.messageBody.attributedText = geoString;
+               // cell.date.textColor = [UIColor darkGrayColor];
+                NSInteger zoomLayer = 15;
+                cell.link = [NSString stringWithFormat:@"https://www.openstreetmap.org/?mlat=%@&mlon=%@&zoom=%ldd", latitude, longitude, zoomLayer];
+            }
+        } else {
+            DDLogWarn(@"msgs of type kMessageTypeGeo should contain a geo location");
+        }
+    } else {
+        // Use default text cell
+        if ([row.messageText containsString:KMessageDecrypt]){
+            cell = (MLDecryptPopupCell *)[self messageTableCellWithIdentifier:@"DecryptPopup" andInbound:inboundDir fromTable: tableView];
+            MLECDHKeyExchange *ecdh = [[MLECDHKeyExchange alloc ] init];
+            NSDictionary *data = [ecdh convertToDictionaryWithText:row.messageText];
+            if (data != nil){
+                NSString *messagebody = [self decryptGroupMessage:data[@"body"]];
+                MLDecryptPopupCell *toreturn = (MLDecryptPopupCell *)[self messageTableCellWithIdentifier:@"DecryptPopup" andInbound:inboundDir fromTable: tableView];
+                NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+                if (groupKey != nil) {
+                    NSString *messageType;
+                    NSString *body = [self decryptGroupMessage:messagebody];
+                    if ([body isEqualToString:@"error_Decrypt"]){
+                        messageType = KMessageDecrypt;
+                        body = messagebody;
+                    }else{
+                        if([body hasPrefix:@"geo:"]){
+                            messageType  = kMessageTypeGeo;
+                        }
+                        //encrypted messages having one single string prefixed with "aesgcm:" are filetransfers, too (tribal knowledge)
+                        else if([body containsString:kMessageTypeImageCaption]){
+                            messageType  = kMessageTypeImageCaption;
+                        }
+                        else if( [body hasPrefix:@"aesgcm://"]){
+                            body = [body componentsSeparatedByString:@"|"][0];
+                            messageType  = kMessageTypeFiletransfer;
+                        }
+                        else if([body hasPrefix:@"https://"]){
+                            messageType  = kMessageTypeUrl;
+                        }
+                        else if ([body hasPrefix:KMessageTypeReply]){
+                            messageType  = KMessageTypeReply;
+                        }else{
+                            messageType = kMessageTypeText;
+                        }
+                       
+                    }
+                    
+                    [[DataLayer sharedInstance] setMessageHistoryId:row.messageDBId messageType:messageType];
+                    [[DataLayer sharedInstance] updateMessageHistory:row.messageDBId withText:body];
+                    //[self.messageTable reloadData];
+                    [self->_messageTable beginUpdates];
+                    [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+                    [self->_messageTable endUpdates];
+                    //update active chats if necessary
+                    [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+                }
+                cell = toreturn;
+            }
+           
+            
+        } else if ([row.messageText containsString:kMessageTypeCreateGroup] || [row.messageText containsString:kMessageTypeAddMember] || [row.messageText containsString:kMessageTypeChangedGroupSubjectName] || [row.messageText containsString:kMessageTypeChangedGroupInfo]){
+            MLReloadCell* reloadCell = (MLReloadCell*)[tableView dequeueReusableCellWithIdentifier:@"reloadBox" forIndexPath:indexPath];
+            
+            NSMutableString *mtblString = [NSMutableString stringWithString:@" "];
+            if ([row.participantJid containsString:@"@"] && row.participantJid != nil){
+                NSMutableString *mtblString1 = [NSMutableString stringWithString:[row.participantJid componentsSeparatedByString:@"@"][0].capitalizedString];
+                [mtblString appendString:mtblString1];
+            }else{
+                [mtblString appendString:row.actualFrom];
+            }
+            
+            if ([row.messageText containsString:kMessageTypeCreateGroup]) {
+                NSString* str = [row.messageText componentsSeparatedByString:@"?"][1];
+                [mtblString appendString:@" "];
+                [mtblString appendString:str];
+                [mtblString appendString:@" "];
+                reloadCell.reloadLabel.text = mtblString;
+            } else if ([row.messageText containsString:kMessageTypeAddMember]) {
+                NSString* str = [row.messageText componentsSeparatedByString:@"?"][1];
+                str = [str componentsSeparatedByString:@"@"][0].capitalizedString;
+                [mtblString appendString:@" added "];
+                [mtblString appendString:str];
+                [mtblString appendString:@" "];
+                reloadCell.reloadLabel.text = mtblString;
+             //   reloadCell.reloadLabel.text = @"added";
+            } else if ([row.messageText containsString:kMessageTypeChangedGroupSubjectName]) {
+                [mtblString appendString:@" changed group subject name! "];
+                [mtblString appendString:@" "];
+                reloadCell.reloadLabel.text = mtblString;
+               // reloadCell.reloadLabel.text = @"changed group subject name";
+            } else if ([row.messageText containsString:kMessageTypeChangedGroupInfo]) {
+                [mtblString appendString:@" changed group info! "];
+                [mtblString appendString:@" "];
+                reloadCell.reloadLabel.text = mtblString;
+                //reloadCell.reloadLabel.text = @"changed group info";
+            }
+            reloadCell.reloadLabel.backgroundColor = UIColor.whiteColor;
+            reloadCell.reloadLabel.textColor = UIColor.darkGrayColor;
+
+            cell = reloadCell;
+            
+        } else{
+            
+            NSError* error = nil;
+            NSDictionary* json = [NSJSONSerialization JSONObjectWithData:[row.messageText dataUsingEncoding:NSUTF8StringEncoding] options:kNilOptions error:&error];
+            if (json[@"message-action"]) {
+                MLReloadCell* reloadCell = (MLReloadCell*)[tableView dequeueReusableCellWithIdentifier:@"reloadBox" forIndexPath:indexPath];
+                NSString* str = json[@"message-action"];
+                NSString* strMember = json[@"member-name"];
+                NSString* strActionBy = json[@"action-by"];
+                strActionBy = [strActionBy componentsSeparatedByString:@"@"][0].capitalizedString;
+                strMember = [strMember componentsSeparatedByString:@"@"][0].capitalizedString;
+                NSLog(@"%@", strActionBy);
+                NSLog(@"%@", strMember);
+                NSMutableString *mtblString = [NSMutableString stringWithString:@" "];
+                if ([str isEqualToString:@"admin"]) {
+                    NSMutableString *mtblString1 = [NSMutableString stringWithString:strActionBy];
+                    [mtblString appendString:mtblString1];
+                    [mtblString appendString:@" gives admin membership to "];
+                    [mtblString appendString:strMember];
+                    [mtblString appendString:@" "];
+                   // [strActionBy stringByAppendingString:@" made admin "];
+                   // [strActionBy stringByAppendingString:strMember];
+                    reloadCell.reloadLabel.text = mtblString;
+                } else if ([str isEqualToString:@"removed"]) {
+                    NSMutableString *mtblString1 = [NSMutableString stringWithString:strActionBy];
+                    [mtblString appendString:mtblString1];
+                    [mtblString appendString:@" removed "];
+                    [mtblString appendString:strMember];
+                    [mtblString appendString:@" "];
+                    
+                  //  [strActionBy stringByAppendingString:@" removed "];
+                  //  [strActionBy stringByAppendingString:strMember];
+                    reloadCell.reloadLabel.text = mtblString;
+                } else if ([str isEqualToString:@"admin-removed"]) {
+                    NSMutableString *mtblString1 = [NSMutableString stringWithString:strActionBy];
+                    [mtblString appendString:mtblString1];
+                    [mtblString appendString:@" revokes admin membership from "];
+                    [mtblString appendString:strMember];
+                    [mtblString appendString:@" "];
+                    
+                    //[strActionBy stringByAppendingString:@" removed admin "];
+                   // [strActionBy stringByAppendingString:strMember];
+                    reloadCell.reloadLabel.text = mtblString;
+                }
+                
+                reloadCell.reloadLabel.backgroundColor = UIColor.whiteColor;
+                reloadCell.reloadLabel.textColor = UIColor.darkGrayColor;
+                
+                cell = reloadCell;
+            } else {
+            
+            cell = (MLChatCell*)[self messageTableCellWithIdentifier:@"text" andInbound:inboundDir fromTable: tableView];
+            //make sure everything is set to defaults
+            cell.bubbleImage.hidden=NO;
+            
+            UIFont* originalFont = [UIFont systemFontOfSize:17.0f];
+            [cell.messageBody setFont:originalFont];
+        
+            // Check if message contains a url
+            NSString* lowerCase = [messageText lowercaseString];
+            NSRange pos = [lowerCase rangeOfString:@"https://"];
+            if(pos.location == NSNotFound) {
+                pos = [lowerCase rangeOfString:@"http://"];
+            }
+            
+            NSRange pos2;
+            if(pos.location != NSNotFound)
+            {
+                NSString* urlString = [messageText substringFromIndex:pos.location];
+                pos2 = [urlString rangeOfString:@" "];
+                if(pos2.location == NSNotFound) {
+                    pos2 = [urlString rangeOfString:@">"];
+                }
+                
+                if(pos2.location != NSNotFound) {
+                    urlString = [urlString substringToIndex:pos2.location];
+                }
+                NSArray* parts = [urlString componentsSeparatedByCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+                cell.link = parts[0];
+                
+                if(cell.link) {
+                    NSMutableAttributedString *formattedString = [[NSMutableAttributedString alloc] initWithString:messageText];
+                    [formattedString addAttribute:NSUnderlineStyleAttributeName value:@(NSUnderlineStyleSingle) range:NSMakeRange(pos.location, cell.link.length)];
+                    cell.messageBody.text = nil;
+                    cell.messageBody.attributedText= formattedString;
+                }
+            }
+            else // Default case
+            {
+                if([MLEmoji containsEmojiWithText:messageText]) {
+                    UIFont* originalFont = [UIFont systemFontOfSize:cell.messageBody.font.pointSize*3];
+                    [cell.messageBody setFont:originalFont];
+                    
+                    [cell.messageBody setText:messageText];
+                    cell.bubbleImage.hidden=YES;
+                }
+                else
+                // Reset attributes
+                //XEP-0245: The slash me Command
+                if([messageText hasPrefix:@"/me "])
+                {
+                    NSString* displayName;
+                    if(row.inbound == NO)
+                        displayName = [MLContact ownDisplayNameForAccount:self.xmppAccount];
+                    else
+                        displayName = [self.contact contactDisplayName];
+                    UIFont* italicFont = [UIFont italicSystemFontOfSize:cell.messageBody.font.pointSize];
+                    
+                    NSMutableAttributedString* attributedMsgString = [[MLXEPSlashMeHandler sharedInstance] attributedStringSlashMeWithAccountId:self.contact.accountId
+                                                                                                                                    displayName:displayName
+                                                                                                                                     actualFrom:row.actualFrom
+                                                                                                                                        message:messageText
+                                                                                                                                        isGroup:self.contact.isGroup
+                                                                                                                                       withFont:italicFont];
+                    
+                    [cell.messageBody setAttributedText:attributedMsgString];
+                } else {
+                    // Reset attributes
+                    UIFont* originalFont = [UIFont systemFontOfSize:cell.messageBody.font.pointSize];
+                    [cell.messageBody setFont:originalFont];
+                    [cell.messageBody setText:messageText];
+                }
+                cell.link = nil;
+            }
+        }
+        
+        }
+      
+    }
+    
+    if(cell == nil)
+    {
+        //this is just a dummy to display something usable (the filetransfer url as link cell)
+        MLLinkCell* toreturn = (MLLinkCell *)[self messageTableCellWithIdentifier:@"link" andInbound:inboundDir fromTable: tableView];;
+        toreturn.link = row.messageText;
+        toreturn.messageBody.text = toreturn.link;
+        
+        cell = toreturn;
+    }
+    MLMessage* priorRow = nil;
+    if(indexPath.row > 0)
+    {
+        priorRow = [self.messageList objectAtIndex:indexPath.row-1];
+    }
+    // Only display names for groups
+    BOOL hideName = YES;
+    if(self.contact.isGroup)
+    {
+        if(row.participantJid) {
+            if ([row.participantJid containsString:@"  "]){
+                NSArray * jid = [row.participantJid componentsSeparatedByString:@"  "];
+                xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+                MLContact* contactObj = [MLContact createContactFromJid:jid[1] andAccountNo:account.accountNo];
+                [cell setGroupMessageImage:contactObj];
+            }else{
+                if (row.actualFrom != nil){
+                    NSString *fromjid = [row.actualFrom stringByAppendingString:@"@imvani.com"];
+                    MLContact* groupContact = [self getMLContactForJid:fromjid andAccount:row.accountId];
+                    [cell setGroupMessageImage:groupContact];
+                }else{
+                    MLContact* groupContact = [self getMLContactForJid:row.participantJid andAccount:row.accountId];
+                    [cell setGroupMessageImage:groupContact];
+                }
+               
+            }
+           
+        }else if(row.actualFrom != nil){
+            NSString *fromjid = [row.actualFrom stringByAppendingString:@"@imvani.com"];
+            MLContact* groupContact = [self getMLContactForJid:fromjid andAccount:row.accountId];
+            [cell setGroupMessageImage:groupContact];
+        }
+        if(!row.inbound) {
+            NSArray* accountList = [[DataLayer sharedInstance] accountList];
+            NSString *myjid = [NSString stringWithFormat:@"%@@%@",[[accountList objectAtIndex:0] objectForKey:@"username"],[[accountList objectAtIndex:0] objectForKey:@"domain"]];
+            xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+            MLContact* contactObj = [MLContact createContactFromJid:myjid andAccountNo:account.accountNo];
+           [cell setGroupMessageImage:contactObj];
+        }
+        if([@"group" isEqualToString:self.contact.mucType] && row.participantJid)
+        {
+            hideName = (priorRow != nil
+                         && [priorRow.participantJid isEqualToString:row.participantJid]);
+            MLContact* groupContact = [self getMLContactForJid:row.participantJid andAccount:row.accountId];
+            if(hideName) {
+                cell.name.text = nil;
+                cell.nameHeight.constant = 0.0;
+                
+            } else {
+                cell.name.text = [[groupContact contactDisplayName] capitalizedString];
+                cell.nameHeight.constant = 18.0;
+                
+                CGFloat hue = ( arc4random() % 256 / 256.0 );  //  0.0 to 1.0
+                CGFloat saturation = ( arc4random() % 128 / 256.0 ) + 0.5;  //  0.5 to 1.0, away from white
+                CGFloat brightness = ( arc4random() % 128 / 256.0 ) + 0.5;  //  0.5 to 1.0, away from black
+                UIColor *color = [UIColor colorWithHue:hue saturation:saturation brightness:brightness alpha:1];
+                cell.name.textColor = color;
+            }
+        }
+        else {
+            hideName = (priorRow != nil
+                             && [priorRow.actualFrom isEqualToString:row.actualFrom]);
+            if(hideName) {
+                cell.name.text = nil;
+                cell.nameHeight.constant = 0.0;
+            } else {
+                cell.name.text = [row.actualFrom capitalizedString];
+                cell.nameHeight.constant = 18.0;
+                cell.name.textColor = UIColor.blackColor;
+            }
+         //   cell.name.text = hideName == YES ? nil : [row.actualFrom capitalizedString];
+        }
+    } else {
+        if(!row.inbound) {
+            NSArray* accountList = [[DataLayer sharedInstance] accountList];
+            NSString *myjid = [NSString stringWithFormat:@"%@@%@",[[accountList objectAtIndex:0] objectForKey:@"username"],[[accountList objectAtIndex:0] objectForKey:@"domain"]];
+            xmpp* account = [[MLXMPPManager sharedInstance].connectedXMPP objectAtIndex:0];
+            MLContact* contactObj = [MLContact createContactFromJid:myjid andAccountNo:account.accountNo];
+           [cell setGroupMessageImage:contactObj];
+        } else {
+            [cell setGroupMessageImage:self.contact];
+        }
+        
+        cell.nameHeight.constant = 0.0;
+    }
+    if(hideName == YES)
+    {
+        // remove hidden text for better constraints
+        cell.name.text = nil;
+    }
+    
+    cell.name.hidden = hideName;
+    
+    NSTextAttachment *clockattachment = [[NSTextAttachment alloc] init];
+    clockattachment.image = [UIImage imageNamed:@"black_clock.png"];
+    NSAttributedString *clock_attachmentString = [NSAttributedString attributedStringWithAttachment:clockattachment];
+     NSMutableAttributedString *clock= [[NSMutableAttributedString alloc] initWithString:@""];
+     [clock appendAttributedString:clock_attachmentString];
+    
+    
+    NSTextAttachment *tickattachment = [[NSTextAttachment alloc] init];
+    tickattachment.image = [UIImage imageNamed:@"black_tick.png"];
+    NSAttributedString *attachmentString = [NSAttributedString attributedStringWithAttachment:tickattachment];
+     NSMutableAttributedString *tick= [[NSMutableAttributedString alloc] initWithString:@""];
+     [tick appendAttributedString:attachmentString];
+    
+    //double_tick
+    NSTextAttachment *double_tickattachment = [[NSTextAttachment alloc] init];
+    double_tickattachment.image = [UIImage imageNamed:@"black_double.png"];
+    NSAttributedString *double_tickattachmentString = [NSAttributedString attributedStringWithAttachment:double_tickattachment];
+     NSMutableAttributedString *doubletick= [[NSMutableAttributedString alloc] initWithString:@""];
+     [doubletick appendAttributedString:double_tickattachmentString];
+    
+    
+    NSTextAttachment *green_tickattachment = [[NSTextAttachment alloc] init];
+     green_tickattachment.image = [UIImage imageNamed:@"Green_tick.png"];
+    NSAttributedString *Green_tickattachmentString = [NSAttributedString attributedStringWithAttachment:green_tickattachment];
+     NSMutableAttributedString *greentick= [[NSMutableAttributedString alloc] initWithString:@""];
+     [greentick appendAttributedString:Green_tickattachmentString];
+    
+    //attention
+    NSTextAttachment *errorattachment = [[NSTextAttachment alloc] init];
+    errorattachment.image = [UIImage imageNamed:@"attention.png"];
+    NSAttributedString *errorAttachmentString = [NSAttributedString attributedStringWithAttachment:errorattachment];
+     NSMutableAttributedString *errorMark= [[NSMutableAttributedString alloc] initWithString:@""];
+     [errorMark appendAttributedString:errorAttachmentString];
+    if(row.hasBeenDisplayed){
+        cell.messageStatus.attributedText = greentick;
+        cell.date.textColor = [UIColor whiteColor];
+    }
+    else if(row.hasBeenReceived){
+        cell.messageStatus.attributedText = doubletick;
+        cell.date.textColor = [UIColor whiteColor];
+    }
+    else if(row.hasBeenSent){
+        cell.messageStatus.attributedText = tick;
+        cell.date.textColor = [UIColor whiteColor];
+    }
+    else{
+        cell.messageStatus.attributedText = clock;
+        cell.date.textColor = [UIColor whiteColor];
+    }
+    //
+  //  CGSize size = CGSizeMake(13, 13);
+  
+    UIImage* image;
+        if(row.starMessage) {
+            image = [UIImage imageNamed:@"FilledStar.png"];
+            cell.lockImage.image = image;
+        } else {
+            image = [UIImage imageNamed:@"starImage.png"];
+            NSMutableArray *starMessageArray1 = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"starMessageArray"] mutableCopy];
+            for (int i = 0; i < starMessageArray1.count; i++) {
+                NSMutableDictionary *mutableDict = [starMessageArray1 objectAtIndex:i];
+                NSNumber* indexMessage = [mutableDict objectForKey:@"messageDBId"];
+                if ([indexMessage isEqualToNumber:row.messageDBId]) {
+                    image = [UIImage imageNamed:@"FilledStar.png"];
+                    cell.lockImage.image = image;
+                    break;
+                }
+            }
+        }
+    
+    cell.messageHistoryId = row.messageDBId;
+    BOOL newSender = NO;
+    if(indexPath.row > 0)
+    {
+        if(priorRow.inbound != row.inbound)
+            newSender = YES;
+    }
+    
+    cell.date.text = @"";
+    cell.dividerDate.text = @"";
+    
+    
+    cell.date.text = [self formattedTimeStampWithSource:row.delayTimeStamp ? row.delayTimeStamp : row.timestamp];
+    cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    
+    cell.dividerDate.text = [self formattedDateWithSource:row.delayTimeStamp?row.delayTimeStamp:row.timestamp andPriorDate:priorRow.timestamp indexPath:indexPath];
+    
+    
+    // Do not hide the lockImage if the message was encrypted
+    cell.lockImage.hidden = !row.encrypted;
+    // Set correct layout in/Outbound
+    cell.outBound = !inboundDir;
+    // Hide messageStatus on inbound messages
+    cell.messageStatus.hidden = inboundDir;
+    
+    cell.parent = self;
+    
+    if(cell.outBound && ([row.errorType length] > 0 || [row.errorReason length] > 0) && !row.hasBeenReceived && row.hasBeenSent)
+    {
+        NSString* str = NSLocalizedString(@"", @" ");
+        errorMark= [[NSMutableAttributedString alloc] initWithString:str];
+        [errorMark appendAttributedString:errorAttachmentString];
+        cell.messageStatus.attributedText = errorMark;
+        cell.deliveryFailed = YES;
+    }
+    
+    [cell updateCellWithNewSender:newSender];
+
+    if(!cell.link) [self resetHistoryAttributeForCell:cell];
+    if(self.searchController.isActive && row.messageDBId)
+    {
+        if([self.searchController isDBIdExistent:row.messageDBId])
+        {
+            NSMutableAttributedString *attributedMsgString = [self.searchController doSearchKeyword:self.searchController.searchBar.text
+                                                                                             onText:messageText
+                                                                                         andInbound:inboundDir];
+            [cell.messageBody setAttributedText:attributedMsgString];
+        }
+    }
+    
+    NSMutableAttributedString* str1 = [[NSMutableAttributedString alloc] initWithAttributedString:cell.messageStatus.attributedText];
+    NSMutableAttributedString* str2 = [[NSMutableAttributedString alloc] initWithString:@" "];
+   // if (cell.date) {
+        NSString* str = [self formattedTimeStampWithSource:row.delayTimeStamp ? row.delayTimeStamp : row.timestamp];
+        str2 = [[NSMutableAttributedString alloc] initWithString:str];
+   // }
+    NSMutableAttributedString* str3 = [[NSMutableAttributedString alloc] initWithString:@"   "];
+    [str2 appendAttributedString:str3];
+    [str2 appendAttributedString:str1];
+    str3 = [[NSMutableAttributedString alloc] initWithString:@" "];
+    [str2 appendAttributedString:str3];
+    
+    cell.messageStatus.attributedText = str2;
+    [cell.messageStatus setTextColor:UIColor.blackColor];
+    
+    cell.date.attributedText = str2;
+  //  cell.name.hidden = YES;
+    cell.lockImage.hidden = YES;
+  
+   // cell.date.textColor = [UIColor blackColor];
+   
+    
+    return cell;
+}
+
+
+-(MLContact*) getMLContactForJid:(NSString*) jid andAccount:(NSString*) accountNo
+{
+    NSString* cacheKey = [NSString stringWithFormat:@"%@|%@", jid, accountNo];
+    @synchronized(_localMLContactCache) {
+        if(_localMLContactCache[cacheKey])
+            return _localMLContactCache[cacheKey];
+        return _localMLContactCache[cacheKey] = [MLContact createContactFromJid:jid andAccountNo:accountNo];
+    }
+}
+
+-(void) loadReplyImageWithwithImageView:(UIImageView *)imageView url:(NSURL*)imageURL completion:(void (^)(void))completion
+{
+    if(imageURL) {
+        [imageView sd_setImageWithURL:imageURL completed:^(UIImage *image, NSError *error, SDImageCacheType cacheType, NSURL *imageURL) {
+            if(error) {
+                imageView.image=nil;
+            }
+            
+            if(completion) completion();
+        }];
+    } else  {
+        imageView.image=nil;
+        if(completion) completion();
+    }
+}
+#pragma mark - tableview delegate
+-(void) tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    [self stopEditing];
+    [self.chatInput resignFirstResponder];
+    MLMessage* message;
+    if(indexPath.row < self.messageList.count){
+        message = [self.messageList objectAtIndex:indexPath.row];
+    }
+       
+    
+    if(indexPath.section == reloadBoxSection) {
+        [self loadOldMsgHistory];
+    } else if(indexPath.section == messagesSection) {
+        MLBaseCell* cell = [tableView cellForRowAtIndexPath:indexPath];
+        if(cell.link)
+        {
+            if([cell respondsToSelector:@selector(openlink:)]) {
+                [(MLChatCell *)cell openlink:self];
+            }
+           else  {
+                self.photos = [[NSMutableArray alloc] init];
+               if ([message.messageText containsString:kMessageTypeImageCaption]){
+                   MLImageMsgCell *imageCell = (MLImageMsgCell *) cell;
+                   IDMPhoto* photo = [IDMPhoto photoWithImage:[imageCell getDisplayedImage]];
+                   // photo.caption=[row objectForKey:@"caption"];
+                   [self.photos addObject:photo];
+               }else{
+                   MLChatImageCell* imageCell = (MLChatImageCell *) cell;
+                   IDMPhoto* photo = [IDMPhoto photoWithImage:[imageCell getDisplayedImage]];
+                   // photo.caption=[row objectForKey:@"caption"];
+                   [self.photos addObject:photo];
+               }
+               
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if(self.photos.count > 0) {
+                    IDMPhotoBrowser* browser = [[IDMPhotoBrowser alloc] initWithPhotos:self.photos];
+                    browser.delegate=self;
+
+                    UIBarButtonItem* close = [[UIBarButtonItem alloc] initWithTitle:NSLocalizedString(@"Close", @"") style:UIBarButtonItemStyleDone target:self action:@selector(closePhotos)];
+                    browser.navigationItem.leftBarButtonItem = close;
+
+                    //
+                    UINavigationController* nav = [[UINavigationController alloc] initWithRootViewController:browser];
+
+                    [self presentViewController:nav animated:YES completion:nil];
+                }
+            });
+        }
+//        else if ([message.messageType isEqualToString:KMessageTypeReply]){
+//            NSString *replytoken = @"^$$%^";
+//            NSString *REPLY_END_REGEX = @"%reply-end-regex";
+//            NSString *REPLY_MID_REGEX = @"%reply-mid-regex";
+//            if ([message.messageText containsString:replytoken] && [message.messageText containsString:REPLY_MID_REGEX] && [message.messageText containsString:REPLY_END_REGEX]){
+//                        NSArray *items = [message.messageText componentsSeparatedByString:@"%reply-end-regex"];
+//
+//                        NSArray *Replyitems = [items[0] componentsSeparatedByString:@"%reply-mid-regex"];
+//
+//
+//                    NSArray* searchResultArray = [[DataLayer sharedInstance] searchResultOfHistoryMessageWithKeyWords:Replyitems[1]
+//                                                                                                                       accountNo:self.contact.accountId
+//                                                                                                                    betweenBuddy:self.contact.contactJid];
+//
+//                    [searchResultArray enumerateObjectsUsingBlock:^(id object, NSUInteger idx, BOOL *stop) {
+//                        MLMessage *message = object;
+//                        if ([message.messageText isEqualToString:Replyitems[1]]){
+//                            for (int idx = 0; idx<self.messageList.count; idx++)
+//                            {
+//                                MLMessage* msg = [self.messageList objectAtIndex:idx];
+//                                if ([message.messageDBId isEqualToNumber:msg.messageDBId]){
+//                                    NSIndexPath* msgIdxPath = [NSIndexPath indexPathForRow:idx inSection:messagesSection];
+//                                    dispatch_async(dispatch_get_main_queue(), ^{
+//                                        [self.messageTable scrollToRowAtIndexPath:msgIdxPath atScrollPosition:UITableViewScrollPositionMiddle animated:NO];
+//                                        MLBaseCell* selectedCell = [self.messageTable cellForRowAtIndexPath:msgIdxPath];
+//                                        UIColor *originColor = [selectedCell.backgroundColor copy];
+//                                        selectedCell.backgroundColor = [UIColor lightGrayColor];
+//
+//                                        [UIView animateWithDuration:0.2 delay:0.2 options:UIViewAnimationOptionCurveLinear animations:^{
+//                                            selectedCell.backgroundColor = originColor;
+//                                        } completion:nil];
+//                                    });
+//
+//                                }
+//                            }
+//                        }
+//                    }];
+//
+//
+//            }else{
+//                NSArray *items = [message.messageText componentsSeparatedByString:replytoken];
+//                NSString *Message = items[1];
+//                NSString *Messageurl;
+//                NSArray *urlitems;
+//                NSArray *MessageItems;
+//                NSArray *UserItems;
+//                NSString *UserName;
+//                if ([Message containsString:@"geo:"]){
+//                    urlitems = [items[1] componentsSeparatedByString:@"?"];
+//                    Messageurl = urlitems[0];
+//                    UserItems = [urlitems[2] componentsSeparatedByString:@"\n"];
+//                    UserName = urlitems[1];
+//                    MessageItems = UserItems;
+//                }else{
+//                    urlitems = [items[1] componentsSeparatedByString:@"|"];
+//                    if (urlitems.count == 1){
+//                        urlitems = [items[1] componentsSeparatedByString:@"?"];
+//                        Messageurl = urlitems[0];
+//
+//                    }else{
+//                        Messageurl = urlitems[0];
+//
+//                    }
+//                }
+//                NSArray* searchResultArray = [[DataLayer sharedInstance] searchResultOfHistoryMessageWithKeyWords:Messageurl
+//                                                                                                                   accountNo:self.contact.accountId
+//                                                                                                                betweenBuddy:self.contact.contactJid];
+//
+//                [searchResultArray enumerateObjectsUsingBlock:^(id object, NSUInteger idx, BOOL *stop) {
+//                    // do something with object
+//                    MLMessage *message = object;
+//                    if ([message.messageText isEqualToString:Messageurl]){
+//                        for (int idx = 0; idx<self.messageList.count; idx++)
+//                        {
+//                            MLMessage* msg = [self.messageList objectAtIndex:idx];
+//                            if ([message.messageDBId isEqualToNumber:msg.messageDBId]){
+//                                NSIndexPath* msgIdxPath = [NSIndexPath indexPathForRow:idx inSection:messagesSection];
+//                                dispatch_async(dispatch_get_main_queue(), ^{
+//                                    [self.messageTable scrollToRowAtIndexPath:msgIdxPath atScrollPosition:UITableViewScrollPositionMiddle animated:NO];
+//                                    MLBaseCell* selectedCell = [self.messageTable cellForRowAtIndexPath:msgIdxPath];
+//                                    UIColor *originColor = [selectedCell.backgroundColor copy];
+//                                    selectedCell.backgroundColor = [UIColor lightGrayColor];
+//
+//                                    [UIView animateWithDuration:0.2 delay:0.2 options:UIViewAnimationOptionCurveLinear animations:^{
+//                                        selectedCell.backgroundColor = originColor;
+//                                    } completion:nil];
+//                                });
+//
+//                            }
+//                        }
+//                    }
+//                }];
+//
+//            }
+//        }
+
+    }
+    
+}
+
+-(void) closePhotos {
+    [self.navigationController dismissViewControllerAnimated:YES completion:nil];
+}
+
+#pragma mark tableview datasource
+
+- (BOOL)tableView:(UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    if(indexPath.section == reloadBoxSection) {
+        return NO;
+    } else {
+        return YES; // for now
+    }
+}
+
+- (BOOL)tableView:(UITableView *)tableView shouldIndentWhileEditingRowAtIndexPath:(NSIndexPath *)indexPath
+{
+    if(indexPath.section == reloadBoxSection) {
+        return NO;
+    } else {
+        return YES;
+    }
+}
+
+
+- (UIContextMenuConfiguration *)tableView:(UITableView *)tableView contextMenuConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath point:(CGPoint)point API_AVAILABLE(ios(13.0)){
+    
+    [self stopEditing];
+
+    //don't allow swipe actions for our reload box
+    if(indexPath.section == reloadBoxSection)
+        return nil;
+    //do some sanity checks
+    MLMessage* message;
+    if(indexPath.row < self.messageList.count)
+        message = [self.messageList objectAtIndex:indexPath.row];
+    else
+    {
+        DDLogError(@"Attempt to access beyond bounds");
+        return nil;
+    }
+    if(!message.messageDBId)
+        return nil;
+   
+    
+    
+    return [UIContextMenuConfiguration configurationWithIdentifier:nil previewProvider:nil actionProvider:^UIMenu * _Nullable(NSArray<UIMenuElement *> * _Nonnull suggestedActions) {
+        UIAction *delete = [UIAction actionWithTitle:@"Delete" image:[UIImage imageNamed:@"delete-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+            [self DeletemessageAtIndexPath:indexPath];
+            
+        }];
+        UIAction *localdelete = [UIAction actionWithTitle:@"Delete" image:[UIImage imageNamed:@"delete-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+            [self LocalDeletemessageAtIndexPath:indexPath];
+        }];
+        UIAction *reply = [UIAction actionWithTitle:@"Reply" image:[UIImage imageNamed:@"reply-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+    
+            [self.ReplyView setHidden:NO];
+            [self.ReplymediaView setHidden:NO];
+            [self.ReplytextLabel setHidden:NO];
+            self.uploadMenuConstraint.constant = 60;
+            self.uploadMenuView.hidden = NO;
+            
+            if (!message.inbound){
+                self.ReplyMessageUser.text = @"You";
+            }else{
+                NSString *User ;
+                    if (self.contact.isGroup){
+                                  User = message.participantJid;
+                                  if (User == nil){
+                                      User = message.actualFrom;
+                                  }
+                              }else{
+                                  User  = message.buddyName;
+                              }
+
+                NSArray *UserComponents = [User componentsSeparatedByString:@"@"];
+                self.ReplyMessageUser.text = UserComponents[0];
+            }
+            NSString *replytoken = @"^$$%^";
+            NSString *REPLY_END_REGEX = @"%reply-end-regex";
+            NSString *REPLY_MID_REGEX = @"%reply-mid-regex";
+             if ([message.messageText containsString:replytoken]) {
+                 if ([message.messageText containsString:replytoken] && [message.messageText containsString:REPLY_MID_REGEX] && [message.messageText containsString:REPLY_END_REGEX]){
+                     NSArray *items = [message.messageText componentsSeparatedByString:@"%reply-end-regex"];
+                     NSString *User = message.buddyName;
+                     if (!message.inbound){
+                         User = [self.jid componentsSeparatedByString:@"@"][0];
+                     }else{
+                         if (self.contact.isGroup){
+                             NSArray *UserComponents = [message.participantJid componentsSeparatedByString:@"@"];
+                             User = UserComponents[0];
+                         }else{
+                             NSArray *UserComponents = [message.buddyName componentsSeparatedByString:@"@"];
+                             User = UserComponents[0];
+                         }
+                        
+                     }
+                 NSTimeInterval timeStamp = [[NSDate date] timeIntervalSince1970];
+                 NSNumber *timeStampObj = [NSNumber numberWithInteger: timeStamp];
+                 NSString *combinedvlaue = [replytoken stringByAppendingString:@"ReplyPlaintextMessage:^"];
+                 NSArray * arr = [items[1] componentsSeparatedByString:@"\n"];
+                 NSString *timeStaampURl = [timeStampObj stringValue];
+                combinedvlaue = [combinedvlaue stringByAppendingString:timeStaampURl];
+               
+                 combinedvlaue = [combinedvlaue stringByAppendingString:@"?"];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:User];
+                 combinedvlaue = [combinedvlaue stringByAppendingString:REPLY_MID_REGEX];
+                 NSString *Replymessage = [arr[1] stringByReplacingOccurrencesOfString:@"\n" withString:@""];
+                 combinedvlaue = [combinedvlaue stringByAppendingString:Replymessage];
+                 combinedvlaue = [combinedvlaue stringByAppendingString:REPLY_END_REGEX];
+                 
+                 combinedvlaue = [combinedvlaue stringByAppendingString:@"\n"];
+                     self.replyMessageText = combinedvlaue;
+                     self.ReplytextLabel.text = Replymessage;
+              
+                 }  else{
+                     NSString *User = message.buddyName;
+                          if (!message.inbound){
+                              User = [self.jid componentsSeparatedByString:@"@"][0];
+                          }else{
+                              if (self.contact.isGroup){
+                                  NSArray *UserComponents = [message.participantJid componentsSeparatedByString:@"@"];
+                                  User = UserComponents[0];
+                              }else{
+                                  NSArray *UserComponents = [message.buddyName componentsSeparatedByString:@"@"];
+                                  User = UserComponents[0];
+                              }
+
+                          }
+                  
+                     NSArray *items = [message.messageText componentsSeparatedByString:@"\n"];
+                     NSTimeInterval timeStamp = [[NSDate date] timeIntervalSince1970];
+                    
+                     NSNumber *timeStampObj = [NSNumber numberWithInteger: timeStamp];
+                     NSString *combinedvlaue = [replytoken stringByAppendingString:@"ReplyPlaintextMessage:^"];
+     
+                     NSString *timeStaampURl = [timeStampObj stringValue];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:timeStaampURl];
+                   
+                     combinedvlaue = [combinedvlaue stringByAppendingString:@"?"];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:User];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:REPLY_MID_REGEX];
+                     NSString *message = [items[1] stringByReplacingOccurrencesOfString:@"\n" withString:@""];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:message];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:REPLY_END_REGEX];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:@"\n"];
+                     
+                     self.replyMessageText = combinedvlaue;
+                     self.ReplytextLabel.text  = message;
+                    
+                 }
+             }else{
+                 if([message.messageType isEqualToString:kMessageTypeUrl] && [[HelperTools defaultsDB] boolForKey:@"ShowURLPreview"]){
+                     [self loadReplyImageWithwithImageView:self.ReplymediaView url:message.previewImage completion:^{}];
+                     self.ReplytextLabel.text = NSLocalizedString(@"🔗 A Link", @"");
+                     [self ReplyMediaMessage:message];
+                 }else if([message.filetransferMimeType hasPrefix:@"image/"])
+                     {
+                         MLBaseCell* selectedCell = [self.messageTable cellForRowAtIndexPath:indexPath];
+                     self.ReplymediaView.image = [(MLChatImageCell*)selectedCell getDisplayedImage];
+                     self.ReplytextLabel.text = NSLocalizedString(@"📷 Image", @"");
+                         [self ReplyMediaMessage:message];
+                 }
+                 else if([message.filetransferMimeType hasPrefix:@"audio/"]){
+                     self.ReplytextLabel.text = NSLocalizedString(@"🎵 Audio Message", @"");
+                     [self ReplyMediaMessage:message];
+                 }
+                 else if([message.filetransferMimeType hasPrefix:@"video/"]){
+                     self.ReplytextLabel.text = NSLocalizedString(@"🎥 Video ", @"");
+                     [self ReplyMediaMessage:message];
+                 }
+                 else if([message.filetransferMimeType isEqualToString:@"application/pdf"]){
+                     self.ReplytextLabel.text = NSLocalizedString(@"📄 Document ", @"");
+                     [self ReplyMediaMessage:message];
+                 }
+                 else if([message.messageType isEqualToString:kMessageTypeGeo]){
+                     [self loadReplyImageWithwithImageView:self.ReplymediaView url:message.previewImage completion:^{}];
+                     self.ReplytextLabel.text = NSLocalizedString(@"📍Location ", @"");
+                     [self ReplyMediaMessage:message];
+                 }
+                 else{
+                     self.ReplytextLabel.text = message.messageText;
+                     NSTimeInterval timeStamp = [[NSDate date] timeIntervalSince1970];
+                     NSNumber *timeStampObj = [NSNumber numberWithInteger: timeStamp];
+                     NSString *User ;
+                     if(self.contact.isGroup){
+                         
+                         User = message.participantJid;
+                         if (message.participantJid == nil){
+                             User = message.actualFrom;
+//                             if (){
+//
+//                             }
+                         }
+                     }else{
+                         User = message.buddyName;
+                   }
+                 
+                     NSArray *UserComponents = [User componentsSeparatedByString:@"@"];
+                     NSString *combinedvlaue = [replytoken stringByAppendingString:@"ReplyPlaintextMessage:^"];
+                     NSArray * arr = [message.messageText componentsSeparatedByString:@"\n"];
+                     NSString *timeStaampURl = [timeStampObj stringValue];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:timeStaampURl];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:@"?"];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:UserComponents[0]];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:REPLY_MID_REGEX];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:arr.firstObject];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:REPLY_END_REGEX];
+                     combinedvlaue = [combinedvlaue stringByAppendingString:@"\n"];
+                     self.replyMessageText = combinedvlaue;
+                 }
+                // self.ReplytextLabel.text  = message.messageText;
+                 
+             }
+           
+            self.placeHolderText.hidden = YES;
+            self.uploadMenuConstraint.constant = 50;
+            self.uploadMenuView.hidden = NO;
+            self.chatInput.text = @"";
+              }];
+        UIAction *copy = [UIAction actionWithTitle:@"Copy" image:[UIImage imageNamed:@"copy-M"]  identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+            UIPasteboard* pasteboard = [UIPasteboard generalPasteboard];
+            MLBaseCell* selectedCell = [self.messageTable cellForRowAtIndexPath:indexPath];
+            if([selectedCell isKindOfClass:[MLChatImageCell class]])
+                pasteboard.image = [(MLChatImageCell*)selectedCell getDisplayedImage];
+            else if([selectedCell isKindOfClass:[MLLinkCell class]])
+                pasteboard.URL = [NSURL URLWithString:((MLLinkCell*)selectedCell).link];
+            else
+                pasteboard.string = message.messageText;
+              }];
+//        UIAction *share = [UIAction actionWithTitle:@"Share" image:[UIImage imageNamed:@"share-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+//
+//              }];
+        UIAction *forward = [UIAction actionWithTitle:@"Forward" image:[UIImage imageNamed:@"forward-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+//            [self performSegueWithIdentifier:@"showContacts" sender:self];
+//            UINavigationController* nav = segue.destinationViewController;
+            
+            UIStoryboard* storyboard = [UIStoryboard storyboardWithName:@"Main" bundle:nil];
+            ContactsViewController* contacts = [storyboard instantiateViewControllerWithIdentifier:@"ContactsVC"];
+            contacts.message = message;
+            contacts.xmppAccount = self.xmppAccount;
+            contacts.forwardMessage = YES;
+            contacts.jid = self.jid;
+            
+
+            [self.navigationController pushViewController:contacts animated:YES];
+            //(ContactsViewController*)nav.topViewController;
+            
+        }];
+
+        
+        UIAction *edit = [UIAction actionWithTitle:@"Edit message" image:[UIImage imageNamed:@"edit-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+            
+            [self.chatInput setText:message.messageText];       //we want to begin editing using the old message
+            self.placeHolderText.hidden = YES;
+            weakify(self);
+            self.editingCallback = ^(NSString* newBody) {
+                strongify(self);
+                self.editingCallback = nil;
+                if(newBody != nil)
+                {
+                    message.messageText = newBody;
+
+                    [self.xmppAccount sendMessage:newBody toContact:self.contact isEncrypted:(self.contact.isEncrypted || message.encrypted) isUpload:NO andMessageId:[[NSUUID UUID] UUIDString] withLMCId:message.messageId];
+                    [[DataLayer sharedInstance] updateMessageHistory:message.messageDBId withText:newBody];
+
+                    [self->_messageTable beginUpdates];
+                    [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+                    [self->_messageTable endUpdates];
+
+                    //update active chats if necessary
+                    [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+                }
+                else
+                {
+                    self.placeHolderText.hidden = NO;
+                    [self.chatInput setText:@""];
+                }
+               
+            };
+              }];
+        MLMessage* message = [self.messageList objectAtIndex:indexPath.row];
+        UIAction *starMessage;
+        if (message.starMessage) {
+            starMessage = [UIAction actionWithTitle:@"Unstar Message" image:[UIImage imageNamed:@"edit-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+                [self LocalStarmessageAtIndexPath:indexPath];
+            }];
+        } else {
+            starMessage = [UIAction actionWithTitle:@"Star Message" image:[UIImage imageNamed:@"edit-M"] identifier:nil handler:^(__kindof UIAction * _Nonnull action) {
+                [self LocalStarmessageAtIndexPath:indexPath];
+            }];
+        }
+        
+        if(!message.inbound && [[DataLayer sharedInstance] checkLMCEligible:message.messageDBId encrypted:(message.encrypted | self.contact.isEncrypted) historyBaseID:nil] && ![message.messageText containsString:@"You deleted the message" ] && ![message.messageText containsString:@"This message was deleted"]){
+                   UIMenu *menu = [UIMenu menuWithTitle:@"" children:@[copy,edit,forward,reply,delete,starMessage]];
+                   return menu;
+               }else if (!message.inbound && ![message.messageText containsString:@"You deleted the message" ] && ![message.messageText containsString:@"This message was deleted"]){
+                   UIMenu *menu = [UIMenu menuWithTitle:@"" children:@[copy,forward,reply,delete]];
+                   return menu;
+               }
+               else{
+                   UIMenu *menu = [UIMenu menuWithTitle:@"" children:@[copy,forward,reply,localdelete,starMessage]];
+                   return menu;
+               }
+
+         
+       
+    }];
+}
+
+
+-(void)ReplyMediaMessage:(MLMessage *)message{
+    NSString *replytoken = @"^$$%^";
+    NSTimeInterval timeStamp = [[NSDate date] timeIntervalSince1970];
+    NSNumber *timeStampObj = [NSNumber numberWithInteger: timeStamp];
+    NSString *User;
+    if (self.contact.isGroup){
+        if (message.participantJid != nil){
+            NSArray *UserComponents = [message.participantJid componentsSeparatedByString:@"@"];
+           
+            User = UserComponents[0];
+        }else{
+            User = message.actualFrom;
+        }
+        
+     }else{
+         NSArray *UserComponents = [message.buddyName componentsSeparatedByString:@"@"];
+         User = UserComponents[0];
+     }
+    NSArray *UserComponents = [User componentsSeparatedByString:@"@"];
+    NSString *combinedvlaue = [replytoken stringByAppendingString:message.messageText];
+    
+    NSString *timeStaampURl = [timeStampObj stringValue];
+    combinedvlaue = [combinedvlaue stringByAppendingString:@"?"];
+    combinedvlaue = [combinedvlaue stringByAppendingString:UserComponents[0]];
+    combinedvlaue = [combinedvlaue stringByAppendingString:@"?"];
+    combinedvlaue = [combinedvlaue stringByAppendingString:timeStaampURl];
+    combinedvlaue = [combinedvlaue stringByAppendingString:@"\n"];
+   
+  
+    self.replyMessageText = combinedvlaue;
+}
+
+
+
+-(void)LocalDeletemessageAtIndexPath:(NSIndexPath *)indexPath{
+    MLMessage* message;
+    message = [self.messageList objectAtIndex:indexPath.row];
+    [[DataLayer sharedInstance] deleteMessageHistory:message.messageDBId];
+
+    [self->_messageTable beginUpdates];
+    [self.messageList removeObjectAtIndex:indexPath.row];
+    [self->_messageTable deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationRight];
+    [self->_messageTable endUpdates];
+
+    //update active chats if necessary
+    [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+}
+
+-(void)LocalStarmessageAtIndexPath:(NSIndexPath *)indexPath{
+    MLMessage* message;
+    message = [self.messageList objectAtIndex:indexPath.row];
+    NSLog(@"%@",message.messageType);
+    if(message.starMessage) {
+        message.starMessage = false;
+        NSMutableArray *starMessageArray1 = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"starMessageArray"] mutableCopy];
+        for (int i = 0; i < starMessageArray1.count; i++) {
+            NSMutableDictionary *mutableDict = [starMessageArray1 objectAtIndex:i];
+            NSNumber* indexMessage = [mutableDict objectForKey:@"messageDBId"];//[starMessageArray1 objectAtIndex:i];
+            if ([indexMessage isEqualToNumber:message.messageDBId]) {
+                [starMessageArray1 removeObjectAtIndex:i];
+                break;
+            }
+        }
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"starMessageArray"];
+        [[NSUserDefaults standardUserDefaults] setObject:starMessageArray1 forKey:@"starMessageArray"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    } else {
+        message.starMessage = true;
+        NSMutableArray *starMessageArray;
+        NSMutableDictionary *mutableDict = [[NSMutableDictionary alloc]init];
+        [mutableDict setObject:self.contact.accountId forKey:@"accountId"];
+        [mutableDict setObject:self.contact.contactJid forKey:@"contactJid"];
+        [mutableDict setObject:message.messageDBId forKey:@"messageDBId"];
+        
+        if ([[NSUserDefaults standardUserDefaults] objectForKey:@"starMessageArray"] == nil) {
+            starMessageArray = [[NSMutableArray alloc] init];
+            [starMessageArray addObject:mutableDict];
+        } else {
+            
+            starMessageArray = [[[NSUserDefaults standardUserDefaults] arrayForKey:@"starMessageArray"] mutableCopy];;
+            [starMessageArray addObject:mutableDict];
+        }
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"starMessageArray"];
+        [[NSUserDefaults standardUserDefaults] setObject:starMessageArray forKey:@"starMessageArray"];
+        [[NSUserDefaults standardUserDefaults] synchronize];
+    }
+    
+ //   NSMutableArray *starMessageArray1 = [[NSUserDefaults standardUserDefaults] objectForKey:@"starMessageArray"];
+//    for (int i = 0; i < starMessageArray1.count; i++) {
+//        NSNumber* indexMessage = [starMessageArray1 objectAtIndex:i];
+//        NSLog(@"%ld",(long) (long)[indexMessage integerValue]);
+//    }
+    [self->_messageTable beginUpdates];
+    [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+    [self->_messageTable endUpdates];
+    
+}
+
+-(void)DeletemessageAtIndexPath:(NSIndexPath *)indexPath{
+    MLMessage* message;
+    message = [self.messageList objectAtIndex:indexPath.row];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Delete" message:@"Select an option" preferredStyle:UIAlertControllerStyleAlert];
+
+    UIAlertAction *DeleteEveryOne = [UIAlertAction actionWithTitle:@"Delete for everyone" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+        NSDictionary *deleteData =  @{@"type":@"delete-request",@"msg-uuid":message.messageId};
+        
+        NSString *jsonString = [ self getJSONOfObject:deleteData];
+       // NSString *MessageRemoteId = message.messageId;
+        [self.xmppAccount sendMessage:jsonString toContact:self.contact isEncrypted:(self.contact.isEncrypted || message.encrypted) isUpload:NO andMessageId:[[NSUUID UUID] UUIDString] withLMCId:message.messageId];
+       // [[DataLayer sharedInstance] deleteMessageHistory:message.messageDBId];
+        message.messageType = kMessageTypeText;
+        [[DataLayer sharedInstance] updateMessageHistory:message.messageDBId withText:@"🗑 You deleted this message"];
+        
+        [self->_messageTable beginUpdates];
+        [self.messageList removeObjectAtIndex:indexPath.row];
+        [self->_messageTable deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationRight];
+        [self->_messageTable endUpdates];
+//        [self->_messageTable beginUpdates];
+//        [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+//        [self->_messageTable endUpdates];
+        //update active chats if necessary
+        [[MLNotificationQueue currentQueue] postNotificationName:kMonalContactRefresh object:self.xmppAccount userInfo:@{@"contact": self.contact}];
+                        }];
+    UIAlertAction *DeleteMe = [UIAlertAction actionWithTitle:@"Delete for me" style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                            //button click event
+        [self LocalDeletemessageAtIndexPath:indexPath];
+                        }];
+    UIAlertAction *cancel = [UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil];
+    [alert addAction:cancel];
+    [alert addAction:DeleteEveryOne];
+    [alert addAction:DeleteMe];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+
+-(MLBaseCell*) fileTransferCellCheckerWithInfo:(NSDictionary*)info direction:(BOOL)inDirection tableView:(UITableView*)tableView andMsg:(MLMessage*)row{
+    MLBaseCell *cell = nil;
+    //TODO JIM: explanation: this was already downloaded and it is an image --> show this image inline
+    
+    if([info[@"mimeType"] hasPrefix:@"image/"])
+    {
+        if ([info[@"url"] containsString:kMessageTypeImageCaption]){
+            MLImageMsgCell *toreturn = (MLImageMsgCell *)[self messageTableCellWithIdentifier:@"ImageMsg" andInbound:inDirection fromTable: tableView];
+            toreturn.message = row;
+            [toreturn loadMessagePreviewWithCompletion:^{
+            }];
+            cell = toreturn;
+            cell.link = row.messageText;
+        }else{
+            MLChatImageCell* imageCell = (MLChatImageCell *)[self messageTableCellWithIdentifier:@"image" andInbound:inDirection fromTable:tableView];
+            [imageCell initCellWithMLMessage:row];
+            cell = imageCell;
+        }
+        
+       // cell.date.textColor = [UIColor darkGrayColor];
+    }
+    else if([info[@"mimeType"] hasPrefix:@"video/"])
+    {
+        MLFileTransferVideoCell* videoCell = (MLFileTransferVideoCell *) [self messageTableCellWithIdentifier:@"fileTransferVideo" andInbound:inDirection fromTable:tableView];
+        NSString* videoStr = info[@"cacheFile"];
+        NSString* videoFileName = info[@"filename"];
+        [videoCell avplayerConfigWithUrlStr:videoStr andMimeType:info[@"mimeType"] fileName:videoFileName andVC:self];
+                
+        cell = videoCell;
+    }
+    else if([info[@"mimeType"] hasPrefix:@"audio/"])
+    {
+        //we may wan to make a new kind later but for now this is perfectly functional
+        MLFileTransferVideoCell* audioCell = (MLFileTransferVideoCell *) [self messageTableCellWithIdentifier:@"fileTransferAudio" andInbound:inDirection fromTable:tableView];
+        NSString *audioStr = info[@"cacheFile"];
+        NSString *audioFileName = info[@"filename"];
+        [audioCell avplayerConfigWithUrlStr:audioStr andMimeType:info[@"mimeType"] fileName:audioFileName andVC:self];
+
+        cell = audioCell;
+    }
+    else
+    {
+        MLFileTransferTextCell* textCell = (MLFileTransferTextCell *) [self messageTableCellWithIdentifier:@"fileTransferText" andInbound:inDirection fromTable:tableView];
+        
+        NSString *fileSizeStr = info[@"size"];
+        long long fileSizeLongLongValue = fileSizeStr.longLongValue;
+        NSString *readableFileSize = [NSByteCountFormatter stringFromByteCount:fileSizeLongLongValue
+                                                                    countStyle:NSByteCountFormatterCountStyleFile];
+        NSString *hintStr = [NSString stringWithFormat:@"%@ %@", NSLocalizedString(@"Open", @""), info[@"filename"]];
+        NSString *fileCacheUrlStr = info[@"cacheFile"];
+        textCell.fileCacheUrlStr = fileCacheUrlStr;
+        
+        NSUInteger countOfMimtTypeComponent = [info[@"mimeType"] componentsSeparatedByString:@";"].count;
+        NSString* fileMimeType = @"";
+        NSString* fileCharSet = @"";
+        NSString* fileEncodeName = @"utf-8";
+        if (countOfMimtTypeComponent > 1)
+        {
+            fileMimeType = [info[@"mimeType"] componentsSeparatedByString:@";"].firstObject;
+            fileCharSet = [info[@"mimeType"] componentsSeparatedByString:@";"].lastObject;
+        }
+        else
+        {
+            fileMimeType = info[@"mimeType"];
+        }
+        
+        if (fileCharSet != nil && fileCharSet.length > 0)
+        {
+            fileEncodeName = [fileCharSet componentsSeparatedByString:@"="].lastObject;
+        }
+        
+        textCell.fileMimeType = fileMimeType;
+        textCell.fileName = info[@"filename"];
+        textCell.fileEncodeName = fileEncodeName;
+        [textCell.fileTransferHint setText:hintStr];
+        [textCell.sizeLabel setText:readableFileSize];
+        textCell.openFileDelegate = self;
+        cell = textCell;
+    }
+    
+    return cell;
+}
+
+//dummy function needed to remove warnign
+-(void) openlink: (id) sender {
+    
+}
+
+-(void) scrollViewDidScroll:(UIScrollView *)scrollView
+{
+    if(self.contact.isGroup)
+        return;
+    
+    // Only load old msgs if the view appeared
+    if(!self.viewDidAppear)
+        return;
+
+    // get current scroll position (y-axis)
+    CGFloat curOffset = scrollView.contentOffset.y;
+    
+    if (self.lastOffset > curOffset)
+    {
+        [self.lastMsgButton setHidden:NO];
+    }
+    
+    CGFloat bottomLength = scrollView.frame.size.height + curOffset;
+
+    if (scrollView.contentSize.height <= bottomLength)
+    {
+        [self.lastMsgButton setHidden:YES];
+    }
+
+    self.lastOffset = curOffset;
+}
+
+-(void) loadOldMsgHistory
+{
+    [self.messageTable.refreshControl beginRefreshing];
+    [self loadOldMsgHistory:self.messageTable.refreshControl];
+}
+
+-(void) loadOldMsgHistory:(id) sender
+{
+    // Load older messages from db
+    NSMutableArray* oldMessages = nil;
+    NSNumber* beforeId = nil;
+    if(self.messageList.count > 0)
+        beforeId = ((MLMessage*)[self.messageList objectAtIndex:0]).messageDBId;
+    oldMessages = [[DataLayer sharedInstance] messagesForContact:self.contact.contactJid forAccount:self.contact.accountId beforeMsgHistoryID:beforeId];
+
+    if(!self.isLoadingMam && [oldMessages count] < kMonalBackscrollingMsgCount)
+    {
+        self.isLoadingMam = YES;        //don't allow multiple parallel mam fetches
+        
+        //not all messages in history db have a stanzaId (messages sent by this monal instance won't have one for example)
+        //--> search for the oldest message having a stanzaId and use that one
+        NSString* oldestStanzaId;
+        for(MLMessage* msg in oldMessages)
+            if(msg.stanzaId)
+            {
+                DDLogVerbose(@"Found oldest stanzaId in messages returned from db: %@", msg.stanzaId);
+                oldestStanzaId = msg.stanzaId;
+                break;
+            }
+        if(!oldestStanzaId)
+        {
+            for(MLMessage* msg in self.messageList)
+            {
+                if(msg.stanzaId)
+                {
+                    DDLogVerbose(@"Found oldest stanzaId in messages already displayed: %@", msg.stanzaId);
+                    oldestStanzaId = msg.stanzaId;
+                    break;
+                }
+            }
+        }
+        
+        //now load more (older) messages from mam
+        DDLogVerbose(@"Loading more messages from mam before stanzaId %@", oldestStanzaId);
+        weakify(self);
+        [self.xmppAccount setMAMQueryMostRecentForContact:self.contact before:oldestStanzaId withCompletion:^(NSArray* _Nullable messages, NSString* _Nullable error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                strongify(self);
+                if(!messages && !error)
+                {
+                    //xmpp account got reconnected
+                    DDLogError(@"Got backscrolling mam error: nil (possible reconnect while querying)");
+                    UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Could not fetch messages", @"") message:NSLocalizedString(@"The connection to the server was interrupted and no old messages could be fetched for this chat. Please try again later. %@", @"") preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Close", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                        [alert dismissViewControllerAnimated:YES completion:nil];
+                    }]];
+                    //[self presentViewController:alert animated:YES completion:nil];
+                }
+                else if(!messages)
+                {
+                    NSString* errorText = error;
+                    if(!error)
+                        errorText = NSLocalizedString(@"All messages already present in local history!", @"");
+                    DDLogError(@"Got backscrolling mam error: %@", errorText);
+                    UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Could not fetch messages", @"") message:[NSString stringWithFormat:NSLocalizedString(@"Could not fetch (all) old messages for this chat from your server archive. Please try again later. %@", @""), errorText] preferredStyle:UIAlertControllerStyleAlert];
+                    [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Close", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+                        [alert dismissViewControllerAnimated:YES completion:nil];
+                    }]];
+                    [self presentViewController:alert animated:YES completion:nil];
+                }
+                else
+                {
+                    if([messages count] == 0) {
+                        self.moreMessagesAvailable = NO;
+                    }
+                    DDLogVerbose(@"Got backscrolling mam response: %lu", (unsigned long)[messages count]);
+                    [self insertOldMessages:[[messages reverseObjectEnumerator] allObjects]];
+                }
+                //allow next mam fetch
+                self.isLoadingMam = NO;
+                if(sender)
+                    [(UIRefreshControl*)sender endRefreshing];
+            });
+        }];
+    }
+    else if(!self.isLoadingMam && [oldMessages count] >= kMonalBackscrollingMsgCount)
+    {
+        if(sender)
+            [(UIRefreshControl*)sender endRefreshing];
+    }
+    
+    //insert everything we got from the db so far
+    if(oldMessages && [oldMessages count] > 0)
+    {
+        //use reverse order to insert messages from newest to oldest (bottom to top in chatview)
+        [self insertOldMessages:[[oldMessages reverseObjectEnumerator] allObjects]];
+    }
+    else
+    {
+        [self doSetNotLoadingHistory];
+    }
+}
+
+-(void) insertOldMessages:(NSArray*) oldMessages
+{
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if(!self.messageList)
+            self.messageList = [[NSMutableArray alloc] init];
+        
+        CGSize sizeBeforeAddingMessages = [self->_messageTable contentSize];
+        // Insert old messages into messageTable
+        NSMutableArray* indexArray = [NSMutableArray array];
+        for(size_t msgIdx = 0; msgIdx < [oldMessages count]; msgIdx++)
+        {
+            MLMessage* msg = [oldMessages objectAtIndex:msgIdx];
+            [self.messageList insertObject:msg atIndex:0];
+            NSIndexPath* newIndexPath = [NSIndexPath indexPathForRow:msgIdx inSection:messagesSection];
+            [indexArray addObject:newIndexPath];
+        }
+        [self->_messageTable beginUpdates];
+        [self->_messageTable insertRowsAtIndexPaths:indexArray withRowAnimation:UITableViewRowAnimationNone];
+        // keep old position - scrolling may stop
+        CGSize sizeAfterAddingMessages = [self->_messageTable contentSize];
+        CGPoint contentOffset = self->_messageTable.contentOffset;
+        CGPoint newOffset = CGPointMake(contentOffset.x, contentOffset.y + sizeAfterAddingMessages.height - sizeBeforeAddingMessages.height);
+        self->_messageTable.contentOffset = newOffset;
+        [self->_messageTable endUpdates];
+
+		[self doSetNotLoadingHistory];
+    });
+}
+
+-(BOOL) canBecomeFirstResponder
+{
+    return YES;
+}
+
+-(UIView *) inputAccessoryView
+{
+    return self.inputContainerView;
+}
+
+// Add new line to chatInput with 'shift + enter'
+-(void) shiftEnterKeyPressed:(UIKeyCommand*)keyCommand
+{
+    if([self.chatInput isFirstResponder]) {
+        // Get current cursor postion
+        NSRange pos = [self.chatInput selectedRange];
+        // Insert \n
+        self.chatInput.text = [self.chatInput.text stringByReplacingCharactersInRange:pos withString:@"\n"];
+    }
+}
+
+// Send message with 'enter' if chatInput is first repsonder
+-(void) enterKeyPressed:(UIKeyCommand*)keyCommand
+{
+    if([self.chatInput isFirstResponder] && self.chatInput.text.length > 0) {
+        [self resignTextView];
+    }
+}
+
+// Open contact details
+-(void) commandIPressed:(UIKeyCommand*)keyCommand
+{
+    [self performSegueWithIdentifier:@"showDetails" sender:self];
+}
+
+// Open search ViewController
+-(void) commandFPressed:(UIKeyCommand*)keyCommand
+{
+    [self showSeachButtonAction];
+}
+
+// List of custom hardware key commands
+- (NSArray<UIKeyCommand *> *)keyCommands {
+    return @[
+            // shift + enter
+            [UIKeyCommand keyCommandWithInput:@"\r" modifierFlags:UIKeyModifierShift action:@selector(shiftEnterKeyPressed:)],
+            // enter
+            [UIKeyCommand keyCommandWithInput:@"\r" modifierFlags:0 action:@selector(enterKeyPressed:)],
+            // command + i
+            [UIKeyCommand keyCommandWithInput:@"i" modifierFlags:UIKeyModifierCommand action:@selector(commandIPressed:)],
+            // command + f
+            [UIKeyCommand keyCommandWithInput:@"f" modifierFlags:UIKeyModifierCommand action:@selector(commandFPressed:)]
+    ];
+}
+
+# pragma mark - Textview delegate functions
+
+- (void)textViewDidBeginEditing:(UITextView *)textView
+{
+    [self scrollToBottom];
+}
+
+- (BOOL)textView:(UITextView *)textView shouldChangeTextInRange:(NSRange)range replacementText:(NSString *)text
+{
+    BOOL shouldInsert = YES;
+    
+    // Notify that we are typing
+    [self sendChatState:YES];
+
+    // Limit text length to kMonalChatMaxAllowedTextLen
+    if([text isEqualToString:@""]) {
+        shouldInsert &= YES;
+    } else {
+        shouldInsert &= (range.location + range.length < kMonalChatMaxAllowedTextLen);
+    }
+    shouldInsert &= ([textView.text length] + [text length] - range.length <= kMonalChatMaxAllowedTextLen);
+
+    return shouldInsert;
+}
+
+- (void)textViewDidChange:(UITextView *)textView
+{
+    if(textView.text.length > 0)
+        self.placeHolderText.hidden = YES;
+    else
+        self.placeHolderText.hidden = NO;
+
+    [self setSendButtonIconWithTextLength:[textView.text length]];
+}
+
+-(void) setSendButtonIconWithTextLength:(NSUInteger)txtLength
+{
+    if ((txtLength == 0) && (self.uploadQueue.count == 0))
+    {
+        self.isAudioMessage = YES;
+        [self.audioRecordButton setHidden:NO];
+        [self.sendButton setHidden:YES];
+    }
+    else
+    {
+        self.isAudioMessage = NO;
+        [self.audioRecordButton setHidden:YES];
+        [self.sendButton setHidden:NO];
+    }
+}
+
+#pragma mark - link preview
+
+-(void) loadPreviewWithUrlForRow:(NSIndexPath *) indexPath withCompletion:(void (^)(void))completion
+{
+    MLMessage* row;
+    if(indexPath.row < self.messageList.count)
+    {
+        row = [self.messageList objectAtIndex:indexPath.row];
+    }
+    else
+    {
+        DDLogError(@"Attempt to access beyond bounds");
+    }
+
+    //prevent duplicated calls from cell animations
+    if([self.previewedIds containsObject:row.messageDBId])
+    {
+        return;
+    }
+
+    if(row.url)
+    {
+        NSMutableURLRequest* headRequest = [[NSMutableURLRequest alloc] initWithURL: row.url];
+        headRequest.HTTPMethod = @"HEAD";
+        headRequest.cachePolicy = NSURLRequestReturnCacheDataElseLoad;
+        
+        NSURLSession* session = [NSURLSession sharedSession];
+        [[session dataTaskWithRequest:headRequest completionHandler:^(NSData* _Nullable data, NSURLResponse* _Nullable response, NSError* _Nullable error) {
+            NSDictionary* headers = ((NSHTTPURLResponse*)response).allHeaderFields;
+            NSString* mimeType = [[headers objectForKey:@"Content-Type"] lowercaseString];
+            NSNumber* contentLength = [headers objectForKey:@"Content-Length"] ? [NSNumber numberWithInt:([[headers objectForKey:@"Content-Length"] intValue])] : @(-1);
+
+            if(mimeType.length==0) {return;}
+            if(![mimeType hasPrefix:@"text"]) {return;}
+            if(contentLength.intValue>500*1024) {return;} //limit to half a meg of HTML
+
+            [self downloadPreviewWithRow:indexPath];
+
+        }] resume];
+
+    }
+    else if(completion)
+        completion();
+}
+
+-(void) downloadPreviewWithRow:(NSIndexPath*) indexPath
+{
+    MLMessage* row;
+    if(indexPath.row < self.messageList.count) {
+        row = [self.messageList objectAtIndex:indexPath.row];
+    } else {
+        DDLogError(@"Attempt to access beyond bounds");
+    }
+    
+    [self.previewedIds addObject:row.messageDBId];
+    /**
+     <meta property="og:title" content="Nintendo recommits to “keep the business going” for 3DS">
+     <meta property="og:image" content="https://cdn.arstechnica.net/wp-content/uploads/2016/09/3DS_SuperMarioMakerforNintendo3DS_char_01-760x380.jpg">
+     facebookexternalhit/1.1
+     */
+    NSMutableURLRequest* request = [[NSMutableURLRequest alloc] initWithURL:row.url];
+    [request setValue:@"facebookexternalhit/1.1" forHTTPHeaderField:@"User-Agent"]; //required on some sites for og tags e.g. youtube
+    request.timeoutInterval = 10;
+    [[[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error)
+    {
+        
+        NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        // prevent repeated calls to this logic  by setting to non null
+        row.previewText=[MLMetaInfo ogContentWithTag:@"og:title" inHTML:body];
+        row.previewImage=[NSURL URLWithString:[[MLMetaInfo ogContentWithTag:@"og:image" inHTML:body] stringByRemovingPercentEncoding]];
+        if(row.previewText.length == 0)
+            row.previewText = @" ";
+        [[DataLayer sharedInstance] setMessageId:row.messageId previewText:[row.previewText copy] andPreviewImage:[row.previewImage.absoluteString copy]];
+        //reload cells
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self->_messageTable reloadRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationNone];
+        });
+    }] resume];
+}
+
+#pragma mark - photo browser delegate
+
+- (NSUInteger)numberOfPhotosInPhotoBrowser:(IDMPhotoBrowser*) photoBrowser
+{
+    return self.photos.count;
+}
+
+- (id <IDMPhoto>)photoBrowser:(IDMPhotoBrowser*) photoBrowser photoAtIndex:(NSUInteger)index
+{
+    if (index < self.photos.count)
+    {
+        return [self.photos objectAtIndex:index];
+    }
+    return nil;
+}
+
+
+#pragma mark - Keyboard
+
+- (void)keyboardWillDisappear:(NSNotification*) aNotification
+{
+    [self setChatInputHeightConstraints:YES];
+    
+}
+
+- (void)keyboardDidShow:(NSNotification*)aNotification
+{
+      //TODO grab animation info
+    NSDictionary* info = [aNotification userInfo];
+    CGSize kbSize = [[info objectForKey:UIKeyboardFrameEndUserInfoKey] CGRectValue].size;
+    if(kbSize.height > 100) { //my inputbar +any other
+        self.hardwareKeyboardPresent = NO;
+    }
+    UIEdgeInsets contentInsets = UIEdgeInsetsMake(0.0, 0.0, kbSize.height - 10, 0.0);
+    self.messageTable.contentInset = contentInsets;
+    self.messageTable.scrollIndicatorInsets = contentInsets;
+    [self scrollToBottom];
+    
+    //self.messageTable.scrollsToTop = YES;
+    // Only scroll to bottom of the message table if a chat is opened
+    // don't scroll down on other events like closing a image preview
+//    if(self.viewDidAppear == NO)
+//        [self scrollToBottom];
+}
+
+- (void)keyboardDidHide:(NSNotification*)aNotification
+{
+    
+    self.tableviewBottom.constant -= 20;
+    [self saveMessageDraft];
+    [self sendChatState:NO];
+    
+    
+
+//    UIEdgeInsets contentInsets = UIEdgeInsetsZero;
+//    self.messageTable.contentInset = contentInsets;
+//    self.messageTable.scrollIndicatorInsets = contentInsets;
+}
+
+- (void)keyboardWillShow:(NSNotification*)aNotification
+{
+    [self setChatInputHeightConstraints:NO];
+    //TODO grab animation info
+//    UIEdgeInsets contentInsets = UIEdgeInsetsZero;
+//    self.messageTable.contentInset = contentInsets;
+//    self.messageTable.scrollIndicatorInsets = contentInsets;
+}
+
+-(void) tempfreezeAutoloading
+{
+    // Allow  autoloading of more messages after a few seconds
+    self.viewIsScrolling = YES;
+    createTimer(1.5, (^{
+        self.viewIsScrolling = NO;
+    }));
+}
+
+-(void) stopEditing
+{
+    if(self.editingCallback)
+        self.editingCallback(nil);      //dismiss swipe action
+}
+
+-(void) showUploadHUD
+{
+    if(!self.uploadHUD)
+    {
+        self.uploadHUD = [MBProgressHUD showHUDAddedTo:self.view animated:YES];
+        self.uploadHUD.removeFromSuperViewOnHide = YES;
+        self.uploadHUD.label.text = NSLocalizedString(@"Uploading", @"");
+        self.uploadHUD.detailsLabel.text = NSLocalizedString(@"Sending file..", @"");
+    }
+    else
+        self.uploadHUD.hidden = NO;
+}
+
+-(void) groupSessionHUD
+{
+    if(!self.uploadHUD)
+    {
+        self.uploadHUD = [MBProgressHUD showHUDAddedTo:self.view animated:YES];
+        self.uploadHUD.removeFromSuperViewOnHide = YES;
+        self.uploadHUD.label.text = NSLocalizedString(@"Generating", @"");
+        self.uploadHUD.detailsLabel.text = NSLocalizedString(@"Generating session key", @"");
+    }
+    else
+        self.uploadHUD.hidden = NO;
+}
+
+-(void) hideUploadHUD
+{
+    self.uploadHUD.hidden = YES;
+}
+
+-(void) showPotentialError:(NSError*) error
+{
+    if(error)
+    {
+        DDLogError(@"Could not send attachment: %@", error);
+        UIAlertController* alert = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Could not upload file", @"") message:[NSString stringWithFormat:@"%@", error.localizedDescription] preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:NSLocalizedString(@"Close", @"") style:UIAlertActionStyleDefault handler:^(UIAlertAction * _Nonnull action) {
+            [alert dismissViewControllerAnimated:YES completion:nil];
+        }]];
+        [self presentViewController:alert animated:YES completion:nil];
+    }
+}
+
+#pragma mark - MLFileTransferTextCell delegate
+-(void) showData:(NSString *)fileUrlStr withMimeType:(NSString *)mimeType andFileName:(NSString * _Nonnull)fileName andFileEncodeName:(NSString * _Nonnull)encodeName
+{
+    MLFileTransferFileViewController *fileViewController = [[MLFileTransferFileViewController alloc] init];
+    fileViewController.fileUrlStr = fileUrlStr;
+    fileViewController.mimeType = mimeType;
+    fileViewController.fileName = fileName;
+    fileViewController.fileEncodeName = encodeName;
+    [self presentViewController:fileViewController animated:NO completion:nil];
+//    [self.navigationController pushViewController:fileViewController animated:NO];
+}
+
+#pragma mark - MLAudioRecoderManager delegate
+-(void)notifyStart
+{
+    CGFloat infoHeight = self.inputContainerView.frame.size.height;
+    CGFloat infoWidth = self.inputContainerView.frame.size.width;
+
+    UIColor* labelBackgroundColor = self.inputContainerView.backgroundColor;
+    self.audioRecoderInfoView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, infoWidth - 50, infoHeight)];
+    self.audioRecoderInfoView.backgroundColor = labelBackgroundColor;
+    UILabel *audioTimeInfoLabel = [[UILabel alloc] initWithFrame:CGRectMake(5, 0, infoWidth - 50, infoHeight)];
+    [audioTimeInfoLabel setText:NSLocalizedString(@"Recording audio", @"")];
+    [self.audioRecoderInfoView addSubview:audioTimeInfoLabel];
+    [self.inputContainerView addSubview:self.audioRecoderInfoView];
+}
+
+-(void)notifyStop:(NSURL*) fileURL
+{
+    [self.audioRecoderInfoView removeFromSuperview];
+    
+    [self showUploadHUD];
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        
+        NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] init];
+        
+            [coordinator coordinateReadingItemAtURL:fileURL options:NSFileCoordinatorReadingForUploading error:nil byAccessor:^(NSURL * _Nonnull newURL) {
+                [MLFiletransfer uploadFile:newURL onAccount:self.xmppAccount withEncryption:self.contact.isEncrypted andCompletion:^(NSString* url, NSString* mimeType, NSNumber* size, NSError* error) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self showPotentialError:error];
+                        if(!error)
+                        {
+                            NSString* newMessageID = [[NSUUID UUID] UUIDString];
+                            if (self.contact.isGroup){
+                                
+                                NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+                                
+                                if (groupKey == nil ) {
+                                      [self SessionKeyGenerate];
+                                    UIAlertController *loadingWarning = [UIAlertController alertControllerWithTitle:NSLocalizedString(@"Hint", @"") message:@"Waiting for the Key response" preferredStyle:UIAlertControllerStyleAlert];
+                                    [self presentViewController:loadingWarning animated:YES completion:^{
+                                        dispatch_queue_t queue = dispatch_get_main_queue();
+                                        dispatch_after(2.0, queue, ^{
+                                            [loadingWarning dismissViewControllerAnimated:YES completion:nil];
+                                        });
+                                    }];
+                                    return;
+                                 }
+                            }
+                            
+                            [self addMessageto:self.contact.contactJid withMessage:url andId:newMessageID messageType:kMessageTypeFiletransfer mimeType:mimeType size:size];
+                           
+                                
+                            if (self.contact.isGroup){
+                                
+                                NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+                                MLECDHKeyExchange *ecdh = [[MLECDHKeyExchange alloc]init];
+                                NSData *groupAAD = [self.contact.contactJid dataUsingEncoding:NSUTF8StringEncoding];
+                                NSData *keyData = [[NSData alloc]
+                                                   initWithBase64EncodedString:groupKey options:0];
+                                if ( keyData == nil) {
+                                  keyData = [HelperTools dataWithBase64EncodedString:groupKey];
+                                }
+                                    NSData *plainData = [url dataUsingEncoding:NSUTF8StringEncoding];
+                                  //[HelperTools dataWithBase64EncodedString:groupKey];
+                                  NSData *ivData = [AESGcm genIV];
+                                  NSData *encrypted_payload = [ecdh aesMessageEncryptWithMessageData:plainData key:keyData iv:ivData AAD:groupAAD];
+                                  NSMutableData *encryptedpayload = [NSMutableData dataWithData:ivData];
+                                  [encryptedpayload appendData:encrypted_payload];
+                                  NSString *base64cipher = [encryptedpayload base64EncodedStringWithOptions:0];
+                              
+
+                                NSLog(@"base64cipher Message %@",base64cipher);
+                                
+                                [[MLXMPPManager sharedInstance] sendMessage:base64cipher toContact:self.contact isEncrypted:NO isUpload:NO messageId:newMessageID
+                                                         withCompletionHandler:^(BOOL success, NSString *messageId) {
+                                    [self groupSessionHUD];
+                           
+                            }];
+                            }else{
+                                [[MLXMPPManager sharedInstance] sendMessage:url toContact:self.contact isEncrypted:self.contact.isEncrypted isUpload:YES messageId:newMessageID withCompletionHandler:^(BOOL success, NSString *messageId) {
+                                    [self hideUploadHUD];
+                           
+                            }];
+                            }
+                        }
+                        DDLogVerbose(@"upload done");
+                    });
+                }];
+            }];
+        
+    });
+}
+
+-(void) updateCurrentTime:(NSTimeInterval) audioDuration
+{
+    int durationMinutes = (int)audioDuration/60;
+    int durationSeconds = (int)audioDuration - durationMinutes*60;
+    
+    for (UIView* subview in self.audioRecoderInfoView.subviews) {
+        if([subview isKindOfClass:[UILabel class]]){
+            UILabel *infoLabel = (UILabel*)subview;
+            [infoLabel setText:[NSString stringWithFormat:@"%02d:%02d", durationMinutes, durationSeconds]];
+            [infoLabel setTextColor:[UIColor blackColor]];
+        }
+    }
+}
+
+-(void) notifyResult:(BOOL)isSuccess error:(NSString*) errorMsg
+{
+    NSString* alertTitle = @"";
+    if(isSuccess) {
+        alertTitle = NSLocalizedString(@"Recode Success", @"");
+    } else {
+        alertTitle = [NSString stringWithFormat:@"%@%@", NSLocalizedString(@"Recode Fail:", @""), errorMsg];
+    }
+
+    UIAlertController* audioRecoderAlert = [UIAlertController alertControllerWithTitle:alertTitle
+                                                                        message:@"" preferredStyle:UIAlertControllerStyleAlert];
+    
+    [self presentViewController:audioRecoderAlert animated:YES completion:^{
+        dispatch_queue_t queue = dispatch_get_main_queue();
+        dispatch_after(1.0, queue, ^{
+            [audioRecoderAlert dismissViewControllerAnimated:YES completion:nil];
+        });
+    }];
+}
+
+# pragma mark - Upload Queue (Backend)
+-(void) addDocumentsToQueue:(NSArray<NSURL*>*) urls
+{
+    NSMutableArray<MLUploadQueueItem*>* newItems = [[NSMutableArray<MLUploadQueueItem*> alloc] init];
+    for(NSUInteger i = 0; i < urls.count; i++)
+    {
+        [newItems addObject:[[MLUploadQueueItem alloc] initWithURL:urls[i]]];
+    }
+    [self addToUIQueue:newItems];
+}
+
+-(void) addImagesToQueue:(NSArray<NSURL*>*) urls
+{
+    NSMutableArray<MLUploadQueueItem*>* newItems = [[NSMutableArray<MLUploadQueueItem*> alloc] init];
+    for(NSUInteger i = 0; i < urls.count; i++)
+    {
+        UIImage* image = [UIImage imageWithData:[NSData dataWithContentsOfURL:urls[i]]];
+        if(image == nil) { // FIXME Fallback to generic document for unsupported file? Some NSURLs may be invalid
+            /*NSError* error = nil;
+            if([urls[i] checkResourceIsReachableAndReturnError:&error] == NO)
+            {
+                DDLogError(@"Fallback to image URL did not work! Error: %@", error.localizedDescription);
+                return;
+            }*/
+            [newItems addObject:[[MLUploadQueueItem alloc] initWithURL:urls[i]]];
+        } else {
+            [newItems addObject:[[MLUploadQueueItem alloc] initWithImage:image imageUrl:urls[i]]];
+        }
+    }
+    [self addToUIQueue:newItems];
+}
+
+// raw image -> no URL info to check duplicates
+-(void) addRawImagesToQueue:(NSArray<UIImage*>*) images
+{
+    NSMutableArray<MLUploadQueueItem*>* newItems = [[NSMutableArray<MLUploadQueueItem*> alloc] init];
+    for(NSUInteger i = 0; i < images.count; i++)
+    {
+        [newItems addObject:[[MLUploadQueueItem alloc] initWithImage:images[i]]];
+    }
+    [self addToUIQueue:newItems];
+}
+
+-(void) handleMediaUploadCompletion:(NSString*) url withMime:(NSString*) mimeType withSize:(NSNumber*) size withError:(NSError*) error
+{
+    [self showPotentialError:error];
+    if(!error)
+    {
+        
+        if (self.contact.isGroup){
+        NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+        if (groupKey == nil) {
+              [self SessionKeyGenerate];
+              return;
+         }
+        }
+      
+        NSString* newMessageID = [[NSUUID UUID] UUIDString];
+        [self addMessageto:self.contact.contactJid withMessage:url andId:newMessageID messageType:kMessageTypeFiletransfer mimeType:mimeType size:size];
+        if (self.contact.isGroup){
+            MLECDHKeyExchange *ecdh = [[MLECDHKeyExchange alloc]init];
+            NSData *groupAAD = [self.contact.contactJid dataUsingEncoding:NSUTF8StringEncoding];
+             NSData *plainData = [url dataUsingEncoding:NSUTF8StringEncoding];
+            NSString *groupKey = [[HelperTools defaultsDB] stringForKey:self.contact.contactJid];
+            NSData *keyData = [[NSData alloc]
+                               initWithBase64EncodedString:groupKey options:0];
+            if ( keyData == nil) {
+              keyData = [HelperTools dataWithBase64EncodedString:groupKey];
+            }
+            
+              NSData *ivData = [AESGcm genIV];
+              NSData *encrypted_payload = [ecdh aesMessageEncryptWithMessageData:plainData key:keyData iv:ivData AAD:groupAAD];
+              NSMutableData *encryptedpayload = [NSMutableData dataWithData:ivData];
+              [encryptedpayload appendData:encrypted_payload];
+              NSString *base64cipher = [encryptedpayload base64EncodedStringWithOptions:0];
+           
+            
+            NSLog(@"base64cipher Message %@",base64cipher);
+            [[MLXMPPManager sharedInstance] sendMessage:base64cipher toContact:self.contact isEncrypted:NO isUpload:NO messageId:newMessageID
+                                     withCompletionHandler:nil];
+        }else{
+            [[MLXMPPManager sharedInstance] sendMessage:url toContact:self.contact isEncrypted:self.contact.isEncrypted isUpload:YES messageId:newMessageID withCompletionHandler:nil];
+        }
+        
+    }
+    DDLogVerbose(@"upload done");
+    if(self.uploadQueue.count > 0)
+    {
+        [self.uploadMenuView performBatchUpdates:^{
+            [self deleteQueueItemAtIndex:0];
+        } completion:^(BOOL finished){
+            [self emptyUploadQueue];
+        }];
+    }
+    else
+    {
+        [self hideUploadQueue];
+        [self hideUploadHUD];
+    }
+}
+
+-(void) emptyUploadQueue
+{
+    if(self.uploadQueue.count == 0)
+    {
+        [self hideUploadQueue];
+        [self hideUploadHUD];
+        return;
+    }
+    assert(self.uploadQueue.count >= 1);
+    [self showUploadHUD];
+
+    DDLogVerbose(@"start dispatch");
+    MLUploadQueueItem* uploadItem = self.uploadQueue.firstObject;
+    if([uploadItem getType] == UPLOAD_QUEUE_TYPE_RAW_IMAGE || [uploadItem getType] == UPLOAD_QUEUE_TYPE_IMAGE_WITH_URL)
+    {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            [MLFiletransfer uploadUIImage:[uploadItem getImage] onAccount:self.xmppAccount withEncryption:self.contact.isEncrypted andCompletion:^(NSString* url, NSString* mimeType, NSNumber* size, NSError* error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self handleMediaUploadCompletion:url withMime:mimeType withSize:size withError:error];
+                });
+            }];
+        });
+    }
+    else if([uploadItem getType] == UPLOAD_QUEUE_TYPE_URL)
+    {
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            NSFileCoordinator* coordinator = [[NSFileCoordinator alloc] init];
+            [coordinator coordinateReadingItemAtURL:[uploadItem getURL] options:NSFileCoordinatorReadingForUploading error:nil byAccessor:^(NSURL * _Nonnull newURL) {
+                [MLFiletransfer uploadFile:newURL onAccount:self.xmppAccount withEncryption:self.contact.isEncrypted andCompletion:^(NSString* url, NSString* mimeType, NSNumber* size, NSError* error) {
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        [self handleMediaUploadCompletion:url withMime:mimeType withSize:size withError:error];
+                    });
+                }];
+            }];
+        });
+    } else {
+        unreachable();
+    }
+}
+
+# pragma mark - Upload Queue (UI)
+-(void) showUploadQueue
+{
+    self.uploadMenuConstraint.constant = 180;
+    self.uploadMenuView.hidden = NO;
+}
+
+-(void) hideUploadQueue
+{
+    [self setSendButtonIconWithTextLength:[self.chatInput.text length]];
+    self.uploadMenuConstraint.constant = 1; // Can't set this to 0, because this will disable the view. If this were to happen, we would not use an accurate queue count if a user empties the queue and fills it afterwards. This is a hack to prevent this behaviour
+    self.uploadMenuView.hidden = YES;
+}
+
+-(void) deleteQueueItemAtIndex:(NSUInteger) index
+{
+    if(self.uploadQueue.count == 1) // Delete last object in queue
+    {
+        [self.uploadMenuView deleteItemsAtIndexPaths:@[[NSIndexPath indexPathForItem:index + 1 inSection:0]]]; // Delete '+' icon if queue is empty
+    }
+    [self.uploadQueue removeObjectAtIndex:index];
+    [self.uploadMenuView deleteItemsAtIndexPaths:@[[NSIndexPath indexPathForItem:index inSection:0]]];
+}
+
+-(void) addToUIQueue:(NSArray<MLUploadQueueItem*>*) newItems;
+{
+    if(self.uploadQueue.count == 0 && newItems.count > 0) // Queue was previously empty but will be filled now
+    {
+        // Force reload of view because this fails after the queue was emptied once otherwise. The '+' cell may also not be in the collection view yet when this function is called.
+        [CATransaction begin];
+        [UIView setAnimationsEnabled:NO];
+        [self showUploadQueue];
+        [self.uploadMenuView performBatchUpdates:^{
+            [self.uploadQueue addObjectsFromArray:newItems];
+            NSMutableArray<NSIndexPath*>* newInd = [[NSMutableArray<NSIndexPath*> alloc] initWithCapacity:newItems.count + 1];
+            for(NSUInteger i = 0; i <= newItems.count; i++)
+            {
+                newInd[i] = [NSIndexPath indexPathForItem:i inSection:0];
+            }
+            [self.uploadMenuView insertItemsAtIndexPaths:newInd];
+        } completion:^(BOOL finished){
+            [CATransaction commit];
+            [UIView setAnimationsEnabled:YES];
+            [self setSendButtonIconWithTextLength:[self.chatInput.text length]];
+        }];
+    }
+    else
+    {
+        [self.uploadMenuView performBatchUpdates:^{
+            // Add all new elements
+            NSUInteger start = self.uploadQueue.count;
+            [self.uploadMenuView reloadItemsAtIndexPaths:@[[NSIndexPath indexPathForItem:start inSection:0]]];
+            [self.uploadQueue addObjectsFromArray:newItems];
+            NSUInteger newElementsInSet = self.uploadQueue.count - start;
+            NSMutableArray<NSIndexPath*>* newInd = [[NSMutableArray<NSIndexPath*> alloc] initWithCapacity:newElementsInSet];
+            for(NSUInteger i = 0; i < newElementsInSet; i++)
+            {
+                newInd[i] = [NSIndexPath indexPathForItem:start + i + 1 inSection:0];
+            }
+            [self.uploadMenuView insertItemsAtIndexPaths:newInd];
+        } completion:^(BOOL finished)
+        {
+            [self.uploadMenuView scrollToItemAtIndexPath:[NSIndexPath indexPathForItem:self.uploadQueue.count inSection:0] atScrollPosition:UICollectionViewScrollPositionRight animated:YES];
+            [self setSendButtonIconWithTextLength:[self.chatInput.text length]];
+        }];
+    }
+}
+
+- (nonnull __kindof UICollectionViewCell*) collectionView:(nonnull UICollectionView*) collectionView cellForItemAtIndexPath:(nonnull NSIndexPath*) indexPath
+{
+    if(indexPath.item == self.uploadQueue.count)
+    { // the '+' tile
+        return [self.uploadMenuView dequeueReusableCellWithReuseIdentifier:@"addToUploadQueueCell" forIndexPath:indexPath];
+    }
+    else
+    { // some image in the queue
+        assert(self.uploadQueue.count >= indexPath.item);
+        MLUploadQueueItem* uploadItem = self.uploadQueue[indexPath.item];
+        if([uploadItem getType] == UPLOAD_QUEUE_TYPE_RAW_IMAGE || [uploadItem getType] == UPLOAD_QUEUE_TYPE_IMAGE_WITH_URL)
+        {
+            MLUploadQueueImageCell* cell = (MLUploadQueueImageCell*) [self.uploadMenuView dequeueReusableCellWithReuseIdentifier:@"UploadQueueImageCell" forIndexPath:indexPath];
+            [cell initCellWithImage:[uploadItem getImage] index:indexPath.item];
+            [cell setUploadQueueDelegate:self];
+            return cell;
+        }
+        else if ([uploadItem getType] == UPLOAD_QUEUE_TYPE_URL)
+        {
+            MLUploadQueueDocumentCell* cell = (MLUploadQueueDocumentCell*) [self.uploadMenuView dequeueReusableCellWithReuseIdentifier:@"UploadQueueDocumentCell" forIndexPath:indexPath];
+            [cell initCellWithURL:[uploadItem getURL] index:indexPath.item];
+            [cell setUploadQueueDelegate:self];
+            return cell;
+        }
+        else
+        {
+            unreachable();
+            return nil;
+        }
+        // https://developer.apple.com/documentation/uikit/uicollectionview/1618063-dequeuereusablecellwithreuseiden?language=objc?
+    }
+}
+
+- (NSInteger) numberOfSectionsInCollectionView:(UICollectionView *)collectionView
+{
+    return 1;
+}
+
+- (NSInteger)collectionView:(nonnull UICollectionView*) collectionView numberOfItemsInSection:(NSInteger)section
+{
+    assert(section == 0);
+    return self.uploadQueue.count == 0 ? 0 : self.uploadQueue.count + 1;
+}
+
+- (void) notifyUploadQueueRemoval:(NSUInteger) index
+{
+    assert(index < self.uploadQueue.count);
+    [self.uploadMenuView performBatchUpdates:^{
+        [self deleteQueueItemAtIndex:index];
+    } completion:^(BOOL finished) {
+        // Fix all indices accordingly
+        for(NSUInteger i = 0; i < self.uploadQueue.count; i++)
+        {
+            MLUploadQueueBaseCell* tmp = (MLUploadQueueImageCell*)[self.uploadMenuView cellForItemAtIndexPath:[NSIndexPath indexPathForItem:i inSection: 0]];
+            tmp.index = i;
+        }
+
+        // Don't show uploadMenuView if queue is empty again
+        if(self.uploadQueue.count == 0)
+        {
+            [self hideUploadQueue];
+        }
+    }];
+}
+
+- (IBAction)addImageToUploadQueue
+{
+    if (@available(iOS 14, *)) {
+        [self presentViewController:[self generatePHPickerViewController] animated:YES completion:nil];
+    } else {
+        UIImagePickerController* mediaPicker = [[UIImagePickerController alloc] init];
+        mediaPicker.delegate = self;
+        mediaPicker.sourceType = UIImagePickerControllerSourceTypePhotoLibrary;
+        mediaPicker.allowsEditing = NO;
+        [self presentViewController:mediaPicker animated:YES completion:nil];
+    }
+}
+
+- (void) dropInteraction:(UIDropInteraction*) interaction performDrop:(id<UIDropSession>)session
+{
+    for(UIDragItem* item in session.items)
+    {
+        NSItemProvider* provider = item.itemProvider;
+        assert(provider != nil);
+        assert([provider hasItemConformingToTypeIdentifier:(NSString*) kUTTypeItem]);
+        [provider loadItemForTypeIdentifier:(NSString*) kUTTypeItem options:nil completionHandler:^(id <NSSecureCoding> urlItem, NSError *error)
+        {
+            if ([(NSObject*)urlItem isKindOfClass: [NSURL class]])
+            {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self addDocumentsToQueue:@[(NSURL*) urlItem]];
+                });
+            }
+        }];
+    }
+}
+
+- (UIDropProposal*) dropInteraction:(UIDropInteraction *)interaction sessionDidUpdate:(id<UIDropSession>)session
+{
+    return [[UIDropProposal alloc] initWithDropOperation:UIDropOperationCopy];
+}
+
+@end
